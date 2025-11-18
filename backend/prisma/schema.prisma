@@ -1,0 +1,618 @@
+// schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String              @id @default(uuid())
+  email             String              @unique
+  passwordHash      String              @map("password_hash")
+  fullName          String              @map("full_name")
+  avatarUrl         String?             @map("avatar_url")
+  preferences       Json?
+  timezone          String              @default("UTC")
+  emailVerified     Boolean             @default(false) @map("email_verified")
+  lastLogin         DateTime?           @map("last_login")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  ownedWorkspaces   Workspace[]         @relation("WorkspaceOwner")
+  workspaceMembers  WorkspaceMember[]
+  personalTasks     PersonalTask[]
+  pages             Page[]
+  journalEntries    JournalEntry[]
+  habits            Habit[]
+  assignedTasks     Task[]              @relation("TaskAssignee")
+  reportedTasks     Task[]              @relation("TaskReporter")
+  comments          Comment[]
+  timeLogs          TimeLog[]
+  notifications     Notification[]
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  attachments       Attachment[]
+
+  @@map("users")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+  GUEST
+}
+
+model Workspace {
+  id                String              @id @default(uuid())
+  name              String
+  slug              String              @unique
+  description       String?
+  avatarUrl         String?             @map("avatar_url")
+  settings          Json?
+  ownerId           String              @map("owner_id")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  owner             User                @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members           WorkspaceMember[]
+  projects          Project[]
+  pages             Page[]
+  integrations      Integration[]
+  analyticsEvents   AnalyticsEvent[]
+  auditLogs         AuditLog[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id                String              @id @default(uuid())
+  workspaceId       String              @map("workspace_id")
+  userId            String              @map("user_id")
+  role              Role
+  permissions       Json?
+  joinedAt          DateTime            @default(now()) @map("joined_at")
+
+  // Relations
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_members")
+}
+
+enum ProjectType {
+  SCRUM
+  KANBAN
+  AGILE
+  WATERFALL
+  SIMPLE
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+}
+
+model Project {
+  id                String              @id @default(uuid())
+  workspaceId       String              @map("workspace_id")
+  name              String
+  key               String              @unique
+  description       String?
+  projectType       ProjectType         @map("project_type")
+  status            ProjectStatus       @default(PLANNING)
+  startDate         DateTime?           @map("start_date")
+  endDate           DateTime?           @map("end_date")
+  ownerId           String              @map("owner_id")
+  settings          Json?
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  archivedAt        DateTime?           @map("archived_at")
+
+  // Relations
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projectSettings   ProjectSettings?
+  epics             Epic[]
+  tasks             Task[]
+  labels            Label[]
+  customFields      CustomField[]
+
+  @@map("projects")
+}
+
+model ProjectSettings {
+  id                String              @id @default(uuid())
+  projectId         String              @unique @map("project_id")
+  workflowStates    Json                @map("workflow_states")
+  issueTypes        Json                @map("issue_types")
+  customFields      Json                @map("custom_fields")
+  automationRules   Json?               @map("automation_rules")
+
+  // Relations
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_settings")
+}
+
+enum Status {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum Priority {
+  LOWEST
+  LOW
+  MEDIUM
+  HIGH
+  HIGHEST
+}
+
+model Epic {
+  id                String              @id @default(uuid())
+  projectId         String              @map("project_id")
+  title             String
+  description       String?
+  status            Status              @default(TODO)
+  priority          Priority            @default(MEDIUM)
+  startDate         DateTime?           @map("start_date")
+  endDate           DateTime?           @map("end_date")
+  assigneeId        String?             @map("assignee_id")
+  sequenceNumber    Int                 @map("sequence_number")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks             Task[]
+
+  @@map("epics")
+}
+
+enum TaskType {
+  STORY
+  TASK
+  BUG
+  EPIC
+  SUBTASK
+}
+
+model Task {
+  id                String              @id @default(uuid())
+  projectId         String              @map("project_id")
+  epicId            String?             @map("epic_id")
+  title             String
+  description       String?
+  type              TaskType            @default(TASK)
+  status            Status              @default(TODO)
+  priority          Priority            @default(MEDIUM)
+  storyPoints       Int?                @map("story_points")
+  dueDate           DateTime?           @map("due_date")
+  assigneeId        String?             @map("assignee_id")
+  reporterId        String              @map("reporter_id")
+  parentTaskId      String?             @map("parent_task_id")
+  sequenceNumber    Int                 @map("sequence_number")
+  customFields      Json?               @map("custom_fields")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  completedAt       DateTime?           @map("completed_at")
+
+  // Relations
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  epic              Epic?               @relation(fields: [epicId], references: [id])
+  assignee          User?               @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  reporter          User                @relation("TaskReporter", fields: [reporterId], references: [id])
+  parentTask        Task?               @relation("TaskSubtasks", fields: [parentTaskId], references: [id])
+  subtasks          Task[]              @relation("TaskSubtasks")
+  comments          Comment[]
+  attachments       Attachment[]
+  timeLogs          TimeLog[]
+  labels            TaskLabel[]
+  dependencies      TaskDependency[]    @relation("TaskDependencies")
+  dependents        TaskDependency[]    @relation("DependentTasks")
+
+  @@map("tasks")
+}
+
+enum DependencyType {
+  BLOCKS
+  BLOCKED_BY
+  RELATES_TO
+  DUPLICATES
+}
+
+model TaskDependency {
+  id                String              @id @default(uuid())
+  taskId            String              @map("task_id")
+  dependsOnTaskId   String              @map("depends_on_task_id")
+  dependencyType    DependencyType      @map("dependency_type")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  task              Task                @relation("TaskDependencies", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTask     Task                @relation("DependentTasks", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@map("task_dependencies")
+}
+
+model Comment {
+  id                String              @id @default(uuid())
+  taskId            String              @map("task_id")
+  userId            String              @map("user_id")
+  content           String
+  mentions          Json?
+  parentCommentId   String?             @map("parent_comment_id")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  deletedAt         DateTime?           @map("deleted_at")
+
+  // Relations
+  task              Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user              User                @relation(fields: [userId], references: [id])
+  parentComment     Comment?            @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies           Comment[]           @relation("CommentReplies")
+
+  @@map("comments")
+}
+
+model Attachment {
+  id                String              @id @default(uuid())
+  taskId            String              @map("task_id")
+  uploadedBy        String              @map("uploaded_by")
+  fileName          String              @map("file_name")
+  fileUrl           String              @map("file_url")
+  mimeType          String              @map("mime_type")
+  fileSize          BigInt              @map("file_size")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  task              Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploader          User                @relation(fields: [uploadedBy], references: [id])
+
+  @@map("attachments")
+}
+
+model TimeLog {
+  id                String              @id @default(uuid())
+  taskId            String              @map("task_id")
+  userId            String              @map("user_id")
+  durationMinutes   Int                 @map("duration_minutes")
+  description       String?
+  loggedAt          DateTime            @map("logged_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  task              Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user              User                @relation(fields: [userId], references: [id])
+
+  @@map("time_logs")
+}
+
+model Label {
+  id                String              @id @default(uuid())
+  projectId         String              @map("project_id")
+  name              String
+  color             String
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks             TaskLabel[]
+
+  @@unique([projectId, name])
+  @@map("labels")
+}
+
+model TaskLabel {
+  taskId            String              @map("task_id")
+  labelId           String              @map("label_id")
+
+  // Relations
+  task              Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  label             Label               @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, labelId])
+  @@map("task_labels")
+}
+
+enum FieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
+  MULTI_SELECT
+  CHECKBOX
+  USER
+}
+
+model CustomField {
+  id                String              @id @default(uuid())
+  projectId         String              @map("project_id")
+  fieldName         String              @map("field_name")
+  fieldType         FieldType           @map("field_type")
+  fieldConfig       Json                @map("field_config")
+  required          Boolean             @default(false)
+  position          Int
+
+  // Relations
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("custom_fields")
+}
+
+enum RecurrencePattern {
+  NONE
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+  CUSTOM
+}
+
+model PersonalTask {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  title             String
+  description       String?
+  completed         Boolean             @default(false)
+  priority          Priority            @default(MEDIUM)
+  dueDate           DateTime?           @map("due_date")
+  dueTime           DateTime?           @map("due_time") @db.Time
+  recurrencePattern RecurrencePattern   @default(NONE) @map("recurrence_pattern")
+  recurrenceConfig  Json?               @map("recurrence_config")
+  parentListId      String?             @map("parent_list_id")
+  position          Int                 @default(0)
+  metadata          Json?
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  completedAt       DateTime?           @map("completed_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("personal_tasks")
+}
+
+enum HabitFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model Habit {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  name              String
+  description       String?
+  frequency         HabitFrequency
+  targetDays        Json?               @map("target_days")
+  streakCount       Int                 @default(0) @map("streak_count")
+  lastCompleted     DateTime?           @map("last_completed")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  logs              HabitLog[]
+
+  @@map("habits")
+}
+
+model HabitLog {
+  id                String              @id @default(uuid())
+  habitId           String              @map("habit_id")
+  logDate           DateTime            @map("log_date") @db.Date
+  completed         Boolean
+  notes             String?
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  habit             Habit               @relation(fields: [habitId], references: [id], onDelete: Cascade)
+
+  @@unique([habitId, logDate])
+  @@map("habit_logs")
+}
+
+enum Mood {
+  VERY_SAD
+  SAD
+  NEUTRAL
+  HAPPY
+  VERY_HAPPY
+}
+
+model JournalEntry {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  title             String?
+  content           String
+  mood              Mood?
+  tags              Json?
+  entryDate         DateTime            @map("entry_date") @db.Date
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("journal_entries")
+}
+
+model Page {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  workspaceId       String?             @map("workspace_id")
+  title             String
+  icon              String?
+  parentPageId      String?             @map("parent_page_id")
+  position          Int                 @default(0)
+  isPublic          Boolean             @default(false) @map("is_public")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+  archivedAt        DateTime?           @map("archived_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace         Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parentPage        Page?               @relation("PageHierarchy", fields: [parentPageId], references: [id])
+  childPages        Page[]              @relation("PageHierarchy")
+  blocks            PageBlock[]
+
+  @@map("pages")
+}
+
+enum BlockType {
+  PARAGRAPH
+  HEADING_1
+  HEADING_2
+  HEADING_3
+  BULLET_LIST
+  NUMBERED_LIST
+  TODO
+  TOGGLE
+  QUOTE
+  CODE
+  DIVIDER
+  IMAGE
+  VIDEO
+  FILE
+  EMBED
+  TABLE
+  CALLOUT
+  DATABASE
+}
+
+model PageBlock {
+  id                String              @id @default(uuid())
+  pageId            String              @map("page_id")
+  blockType         BlockType           @map("block_type")
+  content           Json
+  properties        Json?
+  position          Int
+  parentBlockId     String?             @map("parent_block_id")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  page              Page                @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  parentBlock       PageBlock?          @relation("BlockHierarchy", fields: [parentBlockId], references: [id])
+  childBlocks       PageBlock[]         @relation("BlockHierarchy")
+
+  @@map("page_blocks")
+}
+
+model Notification {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  type              String
+  title             String
+  message           String
+  data              Json?
+  read              Boolean             @default(false)
+  readAt            DateTime?           @map("read_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+enum IntegrationType {
+  GOOGLE_CALENDAR
+  OUTLOOK_CALENDAR
+  GITHUB
+  GITLAB
+  SLACK
+  DISCORD
+  JIRA
+  TRELLO
+}
+
+model Integration {
+  id                String              @id @default(uuid())
+  workspaceId       String              @map("workspace_id")
+  userId            String              @map("user_id")
+  integrationType   IntegrationType     @map("integration_type")
+  config            Json
+  credentialsEncrypted Json             @map("credentials_encrypted")
+  active            Boolean             @default(true)
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("integrations")
+}
+
+model AnalyticsEvent {
+  id                String              @id @default(uuid())
+  userId            String?             @map("user_id")
+  workspaceId       String?             @map("workspace_id")
+  eventName         String              @map("event_name")
+  properties        Json?
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  workspace         Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("analytics_events")
+}
+
+model Session {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  refreshTokenHash  String              @map("refresh_token_hash")
+  deviceInfo        String?             @map("device_info")
+  ipAddress         String?             @map("ip_address")
+  expiresAt         DateTime            @map("expires_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  INVITE
+  REMOVE
+}
+
+model AuditLog {
+  id                String              @id @default(uuid())
+  userId            String              @map("user_id")
+  workspaceId       String?             @map("workspace_id")
+  entityType        String              @map("entity_type")
+  entityId          String              @map("entity_id")
+  action            AuditAction
+  oldValues         Json?               @map("old_values")
+  newValues         Json?               @map("new_values")
+  ipAddress         String?             @map("ip_address")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  // Relations
+  user              User                @relation(fields: [userId], references: [id])
+  workspace         Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("audit_logs")
+}

@@ -1,0 +1,71 @@
+pipeline {
+    agent any
+    stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    echo '📥 Checking out latest code...'
+                    git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/santoshpalla27/aws-cost-calculator.git'
+                }
+            }
+        }
+
+        stage('down') {
+            steps {
+                script {
+                    echo '🧹 Cleaning up Docker system...'
+                    sh """
+                        docker compose down || true 
+                    """
+                }
+            }
+        }
+
+        stage('clean') {
+            steps {
+                script {
+                    echo '🛑 Stopping and removing all containers, networks, and volumes...'
+                    sh """
+                        docker builder prune -a -f
+                        docker volume prune -f
+                        docker container prune -f
+                        docker image prune -a -f
+                    """
+                }
+            }
+        }
+        
+        stage('build') {
+            steps {
+                script {
+                    echo '🧹 Cleaning up Docker system...'
+                    sh """
+                        docker compose build --no-cache  
+                    """
+                }
+            }
+        }
+        
+        stage('deploy') {
+            steps {
+                script {
+                    echo '📋 Copying files to application directory...'
+                    sh """
+                        docker compose up -d
+                    """
+                }
+            }
+        }
+        
+        stage('test Connection') {
+            steps {
+                script {
+                    echo '🔨 Building Docker images...'
+                    sh """
+                        docker compose ps
+                    """
+                }
+            }
+        }
+    }
+}
