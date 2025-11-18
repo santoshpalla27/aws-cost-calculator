@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { AuthGuard } from '@nestjs/passport';
 
@@ -8,45 +8,27 @@ export class AiController {
 
   @UseGuards(AuthGuard('jwt'))
   @Post('complete')
-  async completeText(
+  async complete(
     @Body('prompt') prompt: string,
-    @Body('context') context?: string,
     @Body('maxTokens') maxTokens?: number,
   ) {
-    return this.aiService.completeText(prompt, context, maxTokens);
+    return { completion: await this.aiService.complete(prompt, maxTokens) };
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Post('summarize')
-  async summarizeText(
+  async summarize(
     @Body('text') text: string,
     @Body('maxLength') maxLength?: number,
   ) {
-    return this.aiService.summarizeText(text, maxLength || 100);
+    return { summary: await this.aiService.summarize(text, maxLength) };
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Post('suggest-tasks')
   async suggestTasks(
-    @Body('projectId') projectId: string,
     @Body('context') context: string,
   ) {
-    return this.aiService.suggestTasks(projectId, context);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post('generate-project-name')
-  async generateProjectName(
-    @Body('description') description: string,
-  ) {
-    return this.aiService.generateProjectName(description);
-  }
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post('analyze-sentiment')
-  async analyzeSentiment(
-    @Body('text') text: string,
-  ) {
-    return this.aiService.analyzeSentiment(text);
+    return { suggestions: await this.aiService.suggestTasks(context) };
   }
 }

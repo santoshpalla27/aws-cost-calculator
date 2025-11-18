@@ -177,6 +177,7 @@ model Epic {
 
   // Relations
   project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee          User?               @relation(fields: [assigneeId], references: [id])
   tasks             Task[]
 
   @@map("epics")
