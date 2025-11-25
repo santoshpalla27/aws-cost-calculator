@@ -1,0 +1,141 @@
+{
+  "scenarios": [
+    {
+      "title": "EC2 Instance Unreachable via SSH",
+      "description": "A production EC2 instance suddenly became unreachable via SSH. Users report they cannot connect to the instance, and applications hosted on it are inaccessible.",
+      "category": "aws",
+      "difficulty": "L2",
+      "symptoms": [
+        "SSH connection times out",
+        "Cannot ping the instance public IP",
+        "Instance appears running in AWS Console",
+        "No recent deployments or changes logged",
+        "CloudWatch shows CPU at 2%"
+      ],
+      "logs": "$ ssh -v ec2-user@54.xx.xx.xx\nOpenSSH_8.4p1, OpenSSL 1.1.1k\ndebug1: Connecting to 54.xx.xx.xx [54.xx.xx.xx] port 22.\ndebug1: connect to address 54.xx.xx.xx port 22: Connection timed out\nssh: connect to host 54.xx.xx.xx port 22: Connection timed out",
+      "context": {
+        "instanceType": "t3.medium",
+        "az": "us-east-1a",
+        "vpcId": "vpc-0abc123",
+        "subnetId": "subnet-0def456"
+      },
+      "explanation": "The issue was caused by an overly restrictive Security Group that was accidentally modified to remove the SSH inbound rule. The resolution involved checking and restoring the Security Group rules to allow SSH (port 22) from the appropriate source IP ranges.",
+      "learningPoints": [
+        "Always check Security Groups when connectivity issues arise",
+        "Use AWS Systems Manager Session Manager as a backup access method",
+        "Implement change management for Security Group modifications",
+        "Set up CloudWatch Alarms for Security Group changes"
+      ],
+      "tags": ["ec2", "ssh", "security-groups", "connectivity"],
+      "steps": [
+        {
+          "actionText": "Immediately terminate and recreate the instance",
+          "isCorrect": false,
+          "feedbackIncorrect": "Terminating the instance would cause data loss and downtime. Always diagnose the issue first."
+        },
+        {
+          "actionText": "Check the instance's Security Group inbound rules",
+          "isCorrect": true,
+          "feedbackCorrect": "Correct! Security Groups are a common cause of connectivity issues. Checking inbound rules for port 22 (SSH) is a crucial first step."
+        },
+        {
+          "actionText": "Verify the instance has a public IP address or Elastic IP",
+          "isCorrect": true,
+          "feedbackCorrect": "Good step! An instance needs a public IP to be reachable from the internet."
+        },
+        {
+          "actionText": "Check the Network ACL for the subnet",
+          "isCorrect": true,
+          "feedbackCorrect": "Network ACLs can also block traffic. Checking both inbound and outbound rules is important."
+        },
+        {
+          "actionText": "Verify the route table has a route to the Internet Gateway",
+          "isCorrect": true,
+          "feedbackCorrect": "Without a route to the IGW, the instance cannot communicate with the internet."
+        },
+        {
+          "actionText": "Restart the instance",
+          "isCorrect": false,
+          "feedbackIncorrect": "Restarting won't help if it's a networking/security configuration issue. Diagnose first."
+        },
+        {
+          "actionText": "Add SSH (port 22) inbound rule to Security Group allowing your IP",
+          "isCorrect": true,
+          "feedbackCorrect": "This is the solution if the Security Group was missing the SSH rule."
+        },
+        {
+          "actionText": "Check VPC Flow Logs for rejected traffic",
+          "isCorrect": true,
+          "feedbackCorrect": "Flow Logs can show if traffic is being rejected and help identify the blocking component."
+        }
+      ]
+    },
+    {
+      "title": "EKS Pod Stuck in Pending State",
+      "description": "After deploying a new application to Amazon EKS, pods remain in 'Pending' state and never transition to 'Running'. The deployment seems to hang indefinitely.",
+      "category": "kubernetes",
+      "difficulty": "L3",
+      "symptoms": [
+        "Pods show status 'Pending' for over 10 minutes",
+        "kubectl get pods shows 0/1 READY",
+        "No error messages in pod events initially",
+        "Other existing pods are running fine",
+        "Deployment was successful (no YAML errors)"
+      ],
+      "logs": "$ kubectl describe pod myapp-7d9b8c6f5-x2k9p\nName: myapp-7d9b8c6f5-x2k9p\nStatus: Pending\nEvents:\n  Type     Reason            Age   From               Message\n  ----     ------            ----  ----               -------\n  Warning  FailedScheduling  3m    default-scheduler  0/3 nodes are available: 3 Insufficient cpu.",
+      "context": {
+        "clusterVersion": "1.28",
+        "nodeGroups": 1,
+        "nodeType": "t3.medium",
+        "nodeCount": 3
+      },
+      "explanation": "The pods were stuck because the cluster had insufficient CPU resources. The resource requests in the deployment spec exceeded what was available on the nodes. The solution involves either reducing resource requests, adding more nodes, or using larger instance types.",
+      "learningPoints": [
+        "Always check 'kubectl describe pod' events for scheduling issues",
+        "Resource requests and limits must fit within available node capacity",
+        "Consider using Cluster Autoscaler for dynamic scaling",
+        "Use 'kubectl describe nodes' to see resource allocation"
+      ],
+      "tags": ["eks", "kubernetes", "scheduling", "resources"],
+      "steps": [
+        {
+          "actionText": "Delete and recreate the deployment",
+          "isCorrect": false,
+          "feedbackIncorrect": "Recreating won't help if the underlying resource issue isn't resolved."
+        },
+        {
+          "actionText": "Run 'kubectl describe pod ' to check events",
+          "actionCommand": "kubectl describe pod myapp-7d9b8c6f5-x2k9p",
+          "isCorrect": true,
+          "feedbackCorrect": "Excellent! This reveals the 'Insufficient cpu' message which identifies the root cause."
+        },
+        {
+          "actionText": "Check node resource availability with 'kubectl describe nodes'",
+          "actionCommand": "kubectl describe nodes",
+          "isCorrect": true,
+          "feedbackCorrect": "This shows the Allocatable vs Allocated resources on each node."
+        },
+        {
+          "actionText": "Review and reduce resource requests in the deployment spec",
+          "isCorrect": true,
+          "feedbackCorrect": "If requests are too high, reducing them can allow scheduling on existing nodes."
+        },
+        {
+          "actionText": "Scale up the node group to add more nodes",
+          "isCorrect": true,
+          "feedbackCorrect": "Adding nodes increases cluster capacity to accommodate the workload."
+        },
+        {
+          "actionText": "Restart the Kubernetes scheduler",
+          "isCorrect": false,
+          "feedbackIncorrect": "The scheduler is working correctly - it's reporting insufficient resources. Restarting won't add resources."
+        },
+        {
+          "actionText": "Enable Cluster Autoscaler if not already enabled",
+          "isCorrect": true,
+          "feedbackCorrect": "Cluster Autoscaler can automatically add nodes when pods are pending due to insufficient resources."
+        }
+      ]
+    }
+  ]
+}

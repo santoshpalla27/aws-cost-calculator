@@ -1,58 +1,41 @@
-import React from 'react';
-import clsx from 'clsx';
-import {
-  CloudArrowUpIcon,
-  CalculatorIcon,
-  ChartBarIcon,
-} from '@heroicons/react/24/outline';
+'use client';
 
-interface SidebarProps {
-  activeTab: 'upload' | 'calculator' | 'history';
-  onTabChange: (tab: 'upload' | 'calculator' | 'history') => void;
-}
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Home, ClipboardList, Puzzle, HelpCircle, Trophy } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
-  const tabs = [
-    {
-      id: 'upload' as const,
-      label: 'Terraform Upload',
-      icon: CloudArrowUpIcon,
-      description: 'Scan infrastructure code',
-    },
-    {
-      id: 'calculator' as const,
-      label: 'Price Calculator',
-      icon: CalculatorIcon,
-      description: 'Check live AWS prices',
-    },
-    {
-      id: 'history' as const,
-      label: 'History',
-      icon: ChartBarIcon,
-      description: 'Previous estimates',
-    },
-  ];
+const navItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: Home },
+  { href: '/quizzes', label: 'Quizzes', icon: ClipboardList },
+  { href: '/scenarios', label: 'Scenarios', icon: HelpCircle },
+  { href: '/puzzles', label: 'Puzzles', icon: Puzzle },
+  { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
+];
+
+export function Sidebar() {
+  const pathname = usePathname();
 
   return (
-    <nav className="p-4 space-y-2">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => onTabChange(tab.id)}
-          className={clsx(
-            'w-full flex items-start gap-3 p-3 rounded-lg transition-colors',
-            activeTab === tab.id
-              ? 'bg-dark-800 text-dark-100'
-              : 'text-dark-400 hover:bg-dark-800/50 hover:text-dark-200'
-          )}
-        >
-          <tab.icon className="h-6 w-6 flex-shrink-0 mt-0.5" />
-          <div className="flex flex-col items-start">
-            <span className="font-medium">{tab.label}</span>
-            <span className="text-sm text-dark-400">{tab.description}</span>
-          </div>
-        </button>
-      ))}
-    </nav>
+    <aside className="w-64 border-r">
+      <div className="p-4">
+        <h2 className="text-lg font-semibold">Navigation</h2>
+      </div>
+      <nav className="flex flex-col p-2">
+        {navItems.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={cn(
+              'flex items-center p-2 rounded-lg hover:bg-accent',
+              pathname === item.href ? 'bg-accent' : ''
+            )}
+          >
+            <item.icon className="w-5 h-5 mr-3" />
+            {item.label}
+          </Link>
+        ))}
+      </nav>
+    </aside>
   );
-};
+}

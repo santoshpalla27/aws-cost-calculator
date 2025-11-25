@@ -1,51 +1,55 @@
-# Backend Dockerfile with Terraform binary
-FROM python:3.11-slim
+# Backend Dockerfile
+FROM node:18-alpine AS base
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    TERRAFORM_VERSION=1.7.0
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    unzip \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Terraform
-RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip \
-    -o terraform.zip \
-    && unzip terraform.zip \
-    && mv terraform /usr/local/bin/ \
-    && rm terraform.zip \
-    && terraform version
-
-# Create app user
-RUN useradd -m -u 1000 appuser
-
-# Set working directory
+# Install dependencies only when needed
+FROM base AS deps
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy package files
+COPY package*.json ./
 
-# Copy application code
-COPY --chown=appuser:appuser . .
+# Install dependencies
+RUN npm ci --only=production
 
-# Create workspace directory
-RUN mkdir -p /tmp/terraform_workspaces && chown -R appuser:appuser /tmp/terraform_workspaces
+# Development stage
+FROM base AS development
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+EXPOSE 3001
+CMD ["npm", "run", "dev"]
+
+# Builder stage
+FROM base AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+
+# Production stage
+FROM base AS production
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 expressjs
+
+# Copy built application
+COPY --from=deps /app/node_modules ./node_modules
+COPY --chown=expressjs:nodejs . .
+
+# Set environment
+ENV NODE_ENV=production
+ENV PORT=3001
 
 # Switch to non-root user
-USER appuser
+USER expressjs
 
-# Expose port
-EXPOSE 8000
+EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/api/v1/health || exit 1
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["node", "src/server.js"]

@@ -1,0 +1,134 @@
+{
+  "quizzes": [
+    {
+      "title": "AWS EC2 Fundamentals",
+      "description": "Test your knowledge of Amazon EC2 instances, types, and configurations",
+      "difficulty": "L1",
+      "timeLimit": 1800,
+      "passingScore": 70,
+      "tags": ["ec2", "compute", "fundamentals"],
+      "questions": [
+        {
+          "questionText": "Which EC2 instance type is optimized for memory-intensive applications?",
+          "options": [
+            { "text": "C5 instances", "isCorrect": false },
+            { "text": "R5 instances", "isCorrect": true },
+            { "text": "T3 instances", "isCorrect": false },
+            { "text": "M5 instances", "isCorrect": false }
+          ],
+          "explanation": "R5 instances are memory-optimized and designed for memory-intensive applications like in-memory databases, distributed web caches, and real-time big data analytics. C5 is compute-optimized, T3 is burstable, and M5 is general purpose.",
+          "tags": ["ec2", "instance-types"]
+        },
+        {
+          "questionText": "What is the maximum size of an EBS volume that can be attached to an EC2 instance?",
+          "options": [
+            { "text": "1 TiB", "isCorrect": false },
+            { "text": "16 TiB", "isCorrect": true },
+            { "text": "64 TiB", "isCorrect": false },
+            { "text": "100 TiB", "isCorrect": false }
+          ],
+          "explanation": "The maximum size of an EBS volume is 16 TiB (16,384 GiB). This limit applies to all EBS volume types including gp2, gp3, io1, io2, st1, and sc1.",
+          "tags": ["ebs", "storage"]
+        },
+        {
+          "questionText": "Which placement group strategy provides the lowest latency between instances?",
+          "options": [
+            { "text": "Spread placement group", "isCorrect": false },
+            { "text": "Partition placement group", "isCorrect": false },
+            { "text": "Cluster placement group", "isCorrect": true },
+            { "text": "Default placement", "isCorrect": false }
+          ],
+          "explanation": "Cluster placement groups pack instances close together inside an Availability Zone, providing low-latency network performance ideal for HPC applications. Spread distributes instances across hardware, and Partition divides instances into logical partitions.",
+          "tags": ["ec2", "placement-groups", "networking"]
+        },
+        {
+          "questionText": "What happens to an instance store volume when you stop an EC2 instance?",
+          "options": [
+            { "text": "Data persists until the instance is terminated", "isCorrect": false },
+            { "text": "Data is automatically backed up to S3", "isCorrect": false },
+            { "text": "Data is lost", "isCorrect": true },
+            { "text": "Data is moved to EBS", "isCorrect": false }
+          ],
+          "explanation": "Instance store volumes are ephemeral storage. When you stop or terminate an instance, all data on instance store volumes is lost. For persistent storage, use EBS volumes.",
+          "tags": ["ec2", "instance-store", "storage"]
+        },
+        {
+          "questionText": "Which EC2 pricing model is most cost-effective for workloads that can be interrupted?",
+          "options": [
+            { "text": "On-Demand Instances", "isCorrect": false },
+            { "text": "Reserved Instances", "isCorrect": false },
+            { "text": "Spot Instances", "isCorrect": true },
+            { "text": "Dedicated Hosts", "isCorrect": false }
+          ],
+          "explanation": "Spot Instances offer up to 90% discount compared to On-Demand pricing but can be interrupted with 2-minute notice. They're ideal for fault-tolerant, flexible workloads like batch processing, data analysis, and CI/CD.",
+          "tags": ["ec2", "pricing", "spot"]
+        }
+      ]
+    },
+    {
+      "title": "AWS VPC and Networking",
+      "description": "Master VPC configurations, subnets, security groups, and network connectivity",
+      "difficulty": "L2",
+      "timeLimit": 2400,
+      "passingScore": 70,
+      "tags": ["vpc", "networking", "security"],
+      "questions": [
+        {
+          "questionText": "What is the maximum number of VPCs you can create per AWS Region by default?",
+          "options": [
+            { "text": "1", "isCorrect": false },
+            { "text": "5", "isCorrect": true },
+            { "text": "10", "isCorrect": false },
+            { "text": "Unlimited", "isCorrect": false }
+          ],
+          "explanation": "By default, you can create up to 5 VPCs per Region. This is a soft limit that can be increased by requesting a limit increase through AWS Support.",
+          "tags": ["vpc", "limits"]
+        },
+        {
+          "questionText": "Which component allows instances in a private subnet to access the internet for software updates?",
+          "options": [
+            { "text": "Internet Gateway", "isCorrect": false },
+            { "text": "NAT Gateway", "isCorrect": true },
+            { "text": "Virtual Private Gateway", "isCorrect": false },
+            { "text": "Egress-Only Internet Gateway", "isCorrect": false }
+          ],
+          "explanation": "A NAT Gateway enables instances in private subnets to initiate outbound traffic to the internet while preventing inbound connections. Internet Gateway is for public subnets, VPG is for VPN, and Egress-Only IGW is for IPv6.",
+          "tags": ["vpc", "nat", "networking"]
+        },
+        {
+          "questionText": "What is the difference between a Security Group and a Network ACL?",
+          "options": [
+            { "text": "Security Groups are stateless, NACLs are stateful", "isCorrect": false },
+            { "text": "Security Groups are stateful, NACLs are stateless", "isCorrect": true },
+            { "text": "Both are stateless", "isCorrect": false },
+            { "text": "Both are stateful", "isCorrect": false }
+          ],
+          "explanation": "Security Groups are stateful (return traffic is automatically allowed). Network ACLs are stateless (you must explicitly allow both inbound and outbound traffic). Security Groups operate at instance level, NACLs at subnet level.",
+          "tags": ["vpc", "security-groups", "nacl"]
+        },
+        {
+          "questionText": "Which CIDR block is NOT valid for a VPC?",
+          "options": [
+            { "text": "10.0.0.0/16", "isCorrect": false },
+            { "text": "172.16.0.0/16", "isCorrect": false },
+            { "text": "192.168.0.0/16", "isCorrect": false },
+            { "text": "224.0.0.0/16", "isCorrect": true }
+          ],
+          "explanation": "224.0.0.0/4 is reserved for multicast and cannot be used for VPCs. Valid VPC CIDR ranges are within 10.0.0.0/8, 172.16.0.0/12, and 192.168.0.0/16 (RFC 1918 private address ranges).",
+          "tags": ["vpc", "cidr", "networking"]
+        },
+        {
+          "questionText": "How can you connect two VPCs in different AWS accounts?",
+          "options": [
+            { "text": "Security Groups", "isCorrect": false },
+            { "text": "VPC Peering", "isCorrect": true },
+            { "text": "Route Tables only", "isCorrect": false },
+            { "text": "Network ACLs", "isCorrect": false }
+          ],
+          "explanation": "VPC Peering allows you to connect VPCs across different AWS accounts or regions. It creates a networking connection using private IP addresses. You can also use AWS Transit Gateway for more complex multi-VPC architectures.",
+          "tags": ["vpc", "peering", "cross-account"]
+        }
+      ]
+    }
+  ]
+}
