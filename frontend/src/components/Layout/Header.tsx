@@ -2,7 +2,7 @@ import React from 'react';
 import {
   CurrencyDollarIcon,
   Cog6ToothIcon,
-} from ' @heroicons/react/24/outline';
+} from '@heroicons/react/24/outline';
 
 export const Header: React.FC = () => {
   return (

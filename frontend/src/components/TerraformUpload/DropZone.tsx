@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import {
   CloudArrowUpIcon,
   DocumentArrowUpIcon,
-} from ' @heroicons/react/24/outline';
+} from '@heroicons/react/24/outline';
 
 interface DropZoneProps {
   onFileSelect: (file: File) => void;

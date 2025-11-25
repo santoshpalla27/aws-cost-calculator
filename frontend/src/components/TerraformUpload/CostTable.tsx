@@ -4,7 +4,7 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   ExclamationTriangleIcon,
-} from ' @heroicons/react/24/outline';
+} from '@heroicons/react/24/outline';
 import type { ResourceCostEstimate } from '../../types';
 import {
   formatCurrency,

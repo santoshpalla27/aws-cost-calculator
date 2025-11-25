@@ -4,7 +4,7 @@ import {
   CloudArrowUpIcon,
   CalculatorIcon,
   ChartBarIcon,
-} from ' @heroicons/react/24/outline';
+} from '@heroicons/react/24/outline';
 
 interface SidebarProps {
   activeTab: 'upload' | 'calculator' | 'history';

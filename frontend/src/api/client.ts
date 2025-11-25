@@ -1,18 +1,22 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 
-// Create axios instance
+const getBaseUrl = (): string => {
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    return import.meta.env.VITE_API_URL || '';
+  }
+  return '';
+};
+
 const api: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '',
-  timeout: 300000, // 5 minutes for Terraform operations
+  baseURL: getBaseUrl(),
+  timeout: 300000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Request interceptor
 api.interceptors.request.use(
   (config) => {
-    // Add any auth headers here if needed
     return config;
   },
   (error) => {
@@ -20,14 +24,12 @@ api.interceptors.request.use(
   }
 );
 
-// Response interceptor
 api.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
-    // Handle specific error cases
     if (error.response) {
       const status = error.response.status;
-      const data = error.response.data as any;
+      const data = error.response.data as Record<string, any>;
       
       switch (status) {
         case 400:

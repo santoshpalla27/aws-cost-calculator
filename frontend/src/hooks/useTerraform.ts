@@ -1,4 +1,4 @@
-import { useMutation } from ' @tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { terraformApi } from '../api/client';
 import type { TerraformScanResponse } from '../types';
 

@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { Combobox } from ' @headlessui/react';
+import { Combobox } from '@headlessui/react';
 import {
   ChevronUpDownIcon,
   CheckIcon,
   MagnifyingGlassIcon,
-} from ' @heroicons/react/24/outline';
+} from '@heroicons/react/24/outline';
 import clsx from 'clsx';
 import { useInstanceTypes } from '../../hooks/usePricing';
 import { Loading } from '../common/Loading';

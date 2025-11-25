@@ -4,7 +4,7 @@ import {
   BanknotesIcon,
   CalendarIcon,
   ClockIcon,
-} from ' @heroicons/react/24/outline';
+} from '@heroicons/react/24/outline';
 
 interface TotalCardProps {
   monthlyTotal: number;

@@ -1,4 +1,4 @@
-import { useQuery, useMutation } from ' @tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { pricingApi } from '../api/client';
 import type {
   RegionsResponse,
