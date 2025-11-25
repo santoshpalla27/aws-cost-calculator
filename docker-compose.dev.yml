@@ -1,0 +1,34 @@
+version: '3.8'
+
+# Development overrides
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend/app:/app/app:ro
+      - terraform_workspaces:/tmp/terraform_workspaces
+    environment:
+      - DEBUG=true
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: builder
+    volumes:
+      - ./frontend/src:/app/src:ro
+    ports:
+      - "5173:5173"
+    command: npm run dev -- --host 0.0.0.0
+    environment:
+      - VITE_API_URL=http://localhost:8000
+
+volumes:
+  terraform_workspaces:
+
+networks:
+  app-network:
+    driver: bridge

@@ -1,52 +1,51 @@
-# backend/Dockerfile
+# Backend Dockerfile with Terraform binary
+FROM python:3.11-slim
 
-# Development stage
-FROM node:18-alpine AS development
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TERRAFORM_VERSION=1.7.0
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    unzip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Terraform
+RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip \
+    -o terraform.zip \
+    && unzip terraform.zip \
+    && mv terraform /usr/local/bin/ \
+    && rm terraform.zip \
+    && terraform version
+
+# Create app user
+RUN useradd -m -u 1000 appuser
+
+# Set working directory
 WORKDIR /app
 
-COPY package*.json ./
-COPY prisma ./prisma/
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN npm install
+# Copy application code
+COPY --chown=appuser:appuser . .
 
-COPY . .
+# Create workspace directory
+RUN mkdir -p /tmp/terraform_workspaces && chown -R appuser:appuser /tmp/terraform_workspaces
 
-RUN npx prisma generate
+# Switch to non-root user
+USER appuser
 
-EXPOSE 3001
+# Expose port
+EXPOSE 8000
 
-CMD ["npm", "run", "start:dev"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Build stage
-FROM node:18-alpine AS build
-
-WORKDIR /app
-
-COPY package*.json ./
-COPY prisma ./prisma/
-
-RUN npm ci
-
-COPY . .
-
-RUN npx prisma generate
-RUN npm run build
-
-# Production stage
-FROM node:18-alpine AS production
-
-WORKDIR /app
-
-COPY package*.json ./
-COPY prisma ./prisma/
-
-RUN npm ci --only=production && \
-    npm cache clean --force
-
-COPY --from=build /app/dist ./dist
-COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
-
-EXPOSE 3001
-
-CMD ["node", "dist/main.js"]
+# Run the application
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
