@@ -7,12 +7,12 @@ services:
       dockerfile: Dockerfile
     container_name: aws-cost-estimator-backend
     environment:
-      - AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=\${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
       - AWS_PRICING_REGION=us-east-1
-      - DEBUG=\${DEBUG:-false}
-      - ALLOWED_ORIGINS=\${ALLOWED_ORIGINS:-*}
+      - DEBUG=${DEBUG:-false}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
     volumes:
       - terraform_workspaces:/tmp/terraform_workspaces
     ports:
