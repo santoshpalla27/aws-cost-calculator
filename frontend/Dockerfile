@@ -1,54 +1,24 @@
-# Frontend Dockerfile
-FROM node:18-alpine AS base
+FROM node:20-alpine AS builder
 
-# Install dependencies only when needed
-FROM base AS deps
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci
 
-# Development stage
-FROM base AS development
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
 COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev"]
-
-# Builder stage
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-
-# Set build-time environment variables
-ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-
 RUN npm run build
 
-# Production stage
-FROM base AS production
+FROM node:20-alpine
+
 WORKDIR /app
 
-ENV NODE_ENV=production
+COPY package*.json ./
+RUN npm ci --only=production
 
-# Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Copy built application
+COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/next.config.js ./
 
-USER nextjs
+EXPOSE 3001
 
-EXPOSE 3000
-
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-CMD ["node", "server.js"]
+CMD ["npm", "start"]

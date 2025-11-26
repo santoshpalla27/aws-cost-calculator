@@ -4,146 +4,213 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: interview_master_db
-    restart: unless-stopped
+    container_name: infracost-postgres
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-interview_master}
+      POSTGRES_DB: infracost_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - infracost-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-interview_master}"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - app_network
 
   # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: interview_master_redis
-    restart: unless-stopped
+    container_name: infracost-redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    networks:
+      - infracost-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - app_network
 
-  # Backend API
-  backend:
+  # API Gateway Service
+  api-gateway:
     build:
-      context: ./backend
+      context: ./services/api-gateway
       dockerfile: Dockerfile
-      target: ${NODE_ENV:-development}
-    container_name: interview_master_backend
-    restart: unless-stopped
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      PORT: 3001
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:-interview_master}
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your-super-secret-access-key-min-32-chars}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-your-super-secret-refresh-key-min-32-chars}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    container_name: infracost-api-gateway
     ports:
-      - "3001:3001"
-    volumes:
-      - ./backend:/app
-      - /app/node_modules
-      - backend_logs:/app/logs
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      JWT_SECRET: \${JWT_SECRET:-dev-secret-key-change-in-production}
+      AUTH_SERVICE_URL: http://auth-service:3002
+      TERRAFORM_COST_SERVICE_URL: http://terraform-cost-engine:8000
+      AWS_PRICING_SERVICE_URL: http://aws-pricing-service:3003
+      REPORTS_SERVICE_URL: http://reports-service:3004
+      CORS_ORIGINS: http://localhost:3001,http://frontend:3001
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     networks:
-      - app_network
+      - infracost-network
+    volumes:
+      - ./services/api-gateway/src:/app/src
+      - ./services/api-gateway/logs:/app/logs
 
-  # Frontend
+  # Auth Service
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: infracost-auth-service
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: development
+      PORT: 3002
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: infracost_db
+      JWT_SECRET: \${JWT_SECRET:-dev-secret-key-change-in-production}
+      JWT_EXPIRES_IN: 24h
+      JWT_REFRESH_SECRET: \${JWT_REFRESH_SECRET:-dev-refresh-secret}
+      JWT_REFRESH_EXPIRES_IN: 7d
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - infracost-network
+    volumes:
+      - ./services/auth-service/src:/app/src
+
+  # Terraform Cost Engine Service
+  terraform-cost-engine:
+    build:
+      context: ./services/terraform-cost-engine
+      dockerfile: Dockerfile
+    container_name: infracost-terraform-engine
+    ports:
+      - "8000:8000"
+    environment:
+      DEBUG: "True"
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/infracost_db
+      REDIS_URL: redis://redis:6379/0
+      INFRACOST_API_KEY: \${INFRACOST_API_KEY}
+      AWS_ACCESS_KEY_ID: \${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: \${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: \${AWS_DEFAULT_REGION:-us-east-1}
+      WORK_DIR: /tmp/terraform-work
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - infracost-network
+    volumes:
+      - ./services/terraform-cost-engine/app:/app/app
+      - terraform_work:/tmp/terraform-work
+    privileged: true
+
+  # AWS Pricing Service
+  aws-pricing-service:
+    build:
+      context: ./services/aws-pricing-service
+      dockerfile: Dockerfile
+    container_name: infracost-aws-pricing
+    ports:
+      - "3003:3003"
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      REDIS_URL: redis://redis:6379/0
+      AWS_DEFAULT_REGION: \${AWS_DEFAULT_REGION:-us-east-1}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - infracost-network
+    volumes:
+      - ./services/aws-pricing-service/src:/app/src
+
+  # Reports Service
+  reports-service:
+    build:
+      context: ./services/reports-service
+      dockerfile: Dockerfile
+    container_name: infracost-reports-service
+    ports:
+      - "3004:3004"
+    environment:
+      NODE_ENV: development
+      PORT: 3004
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: infracost_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - infracost-network
+    volumes:
+      - ./services/reports-service/src:/app/src
+      - reports_exports:/tmp/reports
+
+  # Frontend Service
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: ${NODE_ENV:-development}
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://13.217.201.75:3001/api/v1}
-    container_name: interview_master_frontend
-    restart: unless-stopped
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://13.217.201.75:3001/api/v1}
+    container_name: infracost-frontend
     ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:3000
     depends_on:
-      - backend
+      - api-gateway
     networks:
-      - app_network
+      - infracost-network
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
 
-  # Nginx Reverse Proxy (Production)
+  # Nginx Reverse Proxy
   nginx:
-    image: nginx:alpine
-    container_name: interview_master_nginx
-    restart: unless-stopped
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: infracost-nginx
     ports:
       - "80:80"
       - "443:443"
+    depends_on:
+      - api-gateway
+      - frontend
+    networks:
+      - infracost-network
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - frontend
-      - backend
-    networks:
-      - app_network
-    profiles:
-      - production
 
-  # PgAdmin (Development)
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: interview_master_pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@example.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
-    ports:
-      - "5050:80"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      - postgres
-    networks:
-      - app_network
-    profiles:
-      - development
+networks:
+  infracost-network:
+    driver: bridge
 
 volumes:
   postgres_data:
   redis_data:
-  backend_logs:
-  pgadmin_data:
-
-networks:
-  app_network:
-    driver: bridge
+  terraform_work:
+  reports_exports:

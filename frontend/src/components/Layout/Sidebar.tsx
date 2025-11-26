@@ -2,40 +2,70 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, ClipboardList, Puzzle, HelpCircle, Trophy } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import {
+    LayoutDashboard,
+    FileCode,
+    Calculator,
+    FileText,
+    Server,
+    Database,
+    HardDrive,
+    Boxes
+} from 'lucide-react';
+import { clsx } from 'clsx';
 
-const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: Home },
-  { href: '/quizzes', label: 'Quizzes', icon: ClipboardList },
-  { href: '/scenarios', label: 'Scenarios', icon: HelpCircle },
-  { href: '/puzzles', label: 'Puzzles', icon: Puzzle },
-  { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
+const navigation = [
+    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+    { name: 'Terraform', href: '/terraform', icon: FileCode },
+    {
+        name: 'AWS Calculators',
+        icon: Calculator,
+        children: [
+            { name: 'EC2', href: '/calculators/ec2', icon: Server },
+            { name: 'RDS', href: '/calculators/rds', icon: Database },
+            { name: 'S3', href: '/calculators/s3', icon: HardDrive },
+            { name: 'EKS', href: '/calculators/eks', icon: Boxes },
+        ]
+    },
+    { name: 'Reports', href: '/reports', icon: FileText },
 ];
 
 export function Sidebar() {
-  const pathname = usePathname();
+    const pathname = usePathname();
 
-  return (
-    <aside className="w-64 border-r">
-      <div className="p-4">
-        <h2 className="text-lg font-semibold">Navigation</h2>
-      </div>
-      <nav className="flex flex-col p-2">
-        {navItems.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={cn(
-              'flex items-center p-2 rounded-lg hover:bg-accent',
-              pathname === item.href ? 'bg-accent' : ''
-            )}
-          >
-            <item.icon className="w-5 h-5 mr-3" />
-            {item.label}
-          </Link>
+    return (
+
+
+        { navigation.map((item) =& gt; (
+
+            {
+                item.children ? (
+              & lt;& gt;
+
+
+    { item.name }
+
+
+    {
+        item.children.map((child) =& gt; (
+
+
+            { child.name }
+
+        ))
+    }
+                
+              
+            ) : (
+
+
+        { item.name }
+
+    )
+}
+          
         ))}
-      </nav>
-    </aside>
+      
+    
   );
 }

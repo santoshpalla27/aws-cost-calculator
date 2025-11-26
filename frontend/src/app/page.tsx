@@ -1,30 +1,27 @@
-import { Button } from "@/components/ui/button";
-import Link from "next/link";
+'use client';
 
-export default function HomePage() {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen py-2">
-      <main className="flex flex-col items-center justify-center w-full flex-1 px-20 text-center">
-        <h1 className="text-6xl font-bold">
-          Welcome to{' '}
-          <a className="text-blue-600" href="https://nextjs.org">
-            AWS DevOps Interview Master!
-          </a>
-        </h1>
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuthStore } from '@/lib/store/authStore';
 
-        <p className="mt-3 text-2xl">
-          Get ready to ace your next interview.
-        </p>
+export default function Home() {
+    const router = useRouter();
+    const { isAuthenticated } = useAuthStore();
 
-        <div className="flex flex-wrap items-center justify-around max-w-4xl mt-6 sm:w-full">
-          <Link href="/login" passHref>
-            <Button>Login</Button>
-          </Link>
-          <Link href="/signup" passHref>
-            <Button variant="outline">Sign Up</Button>
-          </Link>
+    useEffect(() =& gt; {
+        if (isAuthenticated) {
+            router.push('/dashboard');
+        } else {
+            router.push('/login');
+        }
+    }, [isAuthenticated, router]);
+
+    return (
+        <div>
+            <div>
+                <h1>InfraCost Analyzer Pro</h1>
+                <p>Loading...</p>
+            </div>
         </div>
-      </main>
-    </div>
-  );
+    );
 }
