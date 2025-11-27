@@ -111,3 +111,4 @@ yarn.lock
 *~
 combine_files.ps1
 combined-text.txt
+!frontend/src/lib/
