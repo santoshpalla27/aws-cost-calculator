@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Header from '@/components/layout/Header';
+import Header from '../../../components/layout/Header';
 import S3Calculator from '@/components/calculators/S3Calculator';
 
 export default function S3CalculatorPage() {

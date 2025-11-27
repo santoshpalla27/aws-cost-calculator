@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Header from '@/components/layout/Header';
+import Header from '../../../components/layout/Header';
 import EC2Calculator from '@/components/calculators/EC2Calculator';
 
 export default function EC2CalculatorPage() {

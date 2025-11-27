@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Header from '@/components/layout/Header';
+import Header from '../../../components/layout/Header';
 import EKSCalculator from '@/components/calculators/EKSCalculator';
 
 export default function EKSCalculatorPage() {
