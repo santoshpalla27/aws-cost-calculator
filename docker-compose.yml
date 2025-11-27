@@ -16,6 +16,4 @@ services:
       - PORT=3001
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-
-# Add your AWS credentials here or use environment variables .env file
+      - AWS_REGION=${AWS_REGION:-us-east-1}

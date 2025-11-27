@@ -6,8 +6,16 @@ export const REGION_MAPPING: Record<string, string> = {
     'us-west-2': 'US West (Oregon)',
     'eu-central-1': 'EU (Frankfurt)',
     'eu-west-1': 'EU (Ireland)',
+    'eu-west-2': 'EU (London)',
+    'eu-west-3': 'EU (Paris)',
+    'eu-north-1': 'EU (Stockholm)',
     'ap-southeast-1': 'Asia Pacific (Singapore)',
     'ap-southeast-2': 'Asia Pacific (Sydney)',
     'ap-northeast-1': 'Asia Pacific (Tokyo)',
-    'sa-east-1': 'South America (Sao Paulo)'
+    'ap-northeast-2': 'Asia Pacific (Seoul)',
+    'ap-south-1': 'Asia Pacific (Mumbai)',
+    'sa-east-1': 'South America (Sao Paulo)',
+    'ca-central-1': 'Canada (Central)',
+    'ap-east-1': 'Asia Pacific (Hong Kong)',
+    'me-south-1': 'Middle East (Bahrain)'
 };
