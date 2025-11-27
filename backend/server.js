@@ -81,6 +81,61 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', service: 'OpenCost Pricing Engine' });
 });
 
+const fs = require('fs');
+const path = require('path');
+const { exec } = require('child_process');
+const multer = require('multer');
+const upload = multer({ dest: 'uploads/' });
+
+// Ensure uploads directory exists
+if (!fs.existsSync('uploads')) {
+    fs.mkdirSync('uploads');
+}
+
+app.post('/api/generate-plan', upload.array('files'), async (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No files uploaded' });
+    }
+
+    const workDir = path.join(__dirname, 'uploads', `job-${Date.now()}`);
+    fs.mkdirSync(workDir);
+
+    try {
+        // Move files to workDir
+        for (const file of req.files) {
+            const destPath = path.join(workDir, file.originalname);
+            fs.renameSync(file.path, destPath);
+        }
+
+        // Execute Terraform commands
+        const execPromise = (cmd) => new Promise((resolve, reject) => {
+            exec(cmd, { cwd: workDir }, (error, stdout, stderr) => {
+                if (error) reject({ error, stderr });
+                else resolve(stdout);
+            });
+        });
+
+        await execPromise('terraform init');
+        await execPromise('terraform plan -out=tfplan');
+        const jsonOutput = await execPromise('terraform show -json tfplan');
+
+        const plan = JSON.parse(jsonOutput);
+        res.json(plan);
+
+    } catch (error) {
+        console.error('Terraform Execution Error:', error);
+        res.status(500).json({
+            error: 'Failed to generate plan',
+            details: error.stderr || error.message
+        });
+    } finally {
+        // Cleanup
+        fs.rm(workDir, { recursive: true, force: true }, (err) => {
+            if (err) console.error('Cleanup Error:', err);
+        });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log('Ensure AWS Credentials are configured in your environment.');
