@@ -1,4 +1,4 @@
-import createCsvWriter from 'csv-writer';
+const createCsvWriter = require('csv-writer');
 import { logger } from '../utils/logger';
 
 export class CSVExporter {
@@ -27,7 +27,7 @@ export class CSVExporter {
 
       // Generate CSV content
       let csvContent = 'Resource Name,Resource Type,Monthly Cost,Hourly Cost,Details\n';
-      
+
       for (const resource of resourcesData) {
         csvContent += `"${resource['Resource Name']}","${resource['Resource Type']}","${resource['Monthly Cost']}","${resource['Hourly Cost']}","${resource['Details']}"\n`;
       }
