@@ -15,19 +15,29 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
     const folderInputRef = useRef<HTMLInputElement>(null);
 
     // Recursively traverse directory entries to find files
-    const traverseFileTree = async (entry: any): Promise<File[]> => {
+    const traverseFileTree = async (entry: any, path: string = ''): Promise<File[]> => {
         if (entry.isFile) {
             return new Promise((resolve) => {
-                entry.file((file: File) => resolve([file]));
+                entry.file((file: File) => {
+                    // Manually attach the relative path for DnD files
+                    // We use a custom property or override webkitRelativePath if possible
+                    // But since webkitRelativePath is read-only, we might need to rely on a custom way or just use the path we built
+                    // For now, let's try to define it if it's empty (which it is for DnD)
+                    if (!file.webkitRelativePath) {
+                        Object.defineProperty(file, 'webkitRelativePath', {
+                            value: path + entry.name,
+                            writable: true,
+                            configurable: true
+                        });
+                    }
+                    resolve([file]);
+                });
             });
         } else if (entry.isDirectory) {
             const dirReader = entry.createReader();
             return new Promise((resolve) => {
-                // readEntries might return only a partial list in some browsers, 
-                // but for this implementation we assume a single pass covers most use cases 
-                // or simplistic recursion.
                 dirReader.readEntries(async (entries: any[]) => {
-                    const promises = entries.map((e) => traverseFileTree(e));
+                    const promises = entries.map((e) => traverseFileTree(e, path + entry.name + "/"));
                     const results = await Promise.all(promises);
                     resolve(results.flat());
                 });
@@ -60,13 +70,13 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
 
     const handleFiles = (input: FileList | File[] | null) => {
         if (!input) return;
-        
+
         const files = input instanceof FileList ? Array.from(input) : input;
-        
+
         if (files.length === 0) return;
 
         // Filter valid files (.json or .tf)
-        const validFiles = files.filter(f => 
+        const validFiles = files.filter(f =>
             f.name.endsWith('.json') || f.name.endsWith('.tf')
         );
 
@@ -82,7 +92,7 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
     const onDrop = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(false);
-        
+
         if (e.dataTransfer.items) {
             processDroppedItems(e.dataTransfer.items);
         } else if (e.dataTransfer.files) {
@@ -94,9 +104,8 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
         <div className="w-full">
             <label className="block text-sm font-medium text-slate-400 mb-2">{label}</label>
             <div
-                className={`border-2 border-dashed rounded-lg p-8 transition-colors text-center cursor-pointer relative ${
-                    isDragging ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-slate-600 bg-slate-800'
-                }`}
+                className={`border-2 border-dashed rounded-lg p-8 transition-colors text-center cursor-pointer relative ${isDragging ? 'border-blue-500 bg-blue-500/10' : 'border-slate-700 hover:border-slate-600 bg-slate-800'
+                    }`}
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={onDrop}
@@ -122,7 +131,7 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
                         </div>
                     </div>
                 )}
-                
+
                 {/* Standard File Input */}
                 <input
                     ref={fileInputRef}
@@ -142,10 +151,10 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
                     onChange={(e) => handleFiles(e.target.files)}
                 />
             </div>
-            
+
             <div className="mt-2 flex justify-between items-start">
                 <div className="text-xs text-slate-500">
-                    <button 
+                    <button
                         onClick={(e) => { e.stopPropagation(); folderInputRef.current?.click(); }}
                         className="text-blue-400 hover:text-blue-300 hover:underline flex items-center gap-1"
                     >

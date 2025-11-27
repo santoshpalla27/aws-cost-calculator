@@ -118,11 +118,23 @@ app.post('/api/generate-plan', upload.array('files'), (req, res) => {
     (async () => {
         try {
             // Move files
-            for (const file of req.files) {
-                const destPath = path.join(workDir, file.originalname);
+            // req.body.paths is either a string (if 1 file) or array (if multiple)
+            let paths = req.body.paths;
+            if (paths && !Array.isArray(paths)) {
+                paths = [paths];
+            }
+
+            for (let i = 0; i < req.files.length; i++) {
+                const file = req.files[i];
+                // Use provided path or fallback to filename
+                const relativePath = (paths && paths[i]) ? paths[i] : file.originalname;
+                const destPath = path.join(workDir, relativePath);
+
+                // Ensure subdirectory exists
+                fs.mkdirSync(path.dirname(destPath), { recursive: true });
                 fs.renameSync(file.path, destPath);
             }
-            broadcast(jobId, 'log', 'Files uploaded successfully.');
+            broadcast(jobId, 'log', 'Files uploaded and directory structure reconstructed.');
 
             const runCommand = (cmd, args) => new Promise((resolve, reject) => {
                 broadcast(jobId, 'log', `Running: ${cmd} ${args.join(' ')}`);
@@ -149,8 +161,8 @@ app.post('/api/generate-plan', upload.array('files'), (req, res) => {
                 });
             });
 
-            await runCommand('terraform', ['init', '-no-color']);
-            await runCommand('terraform', ['plan', '-out=tfplan', '-no-color']);
+            await runCommand('terraform', ['init', '-no-color', '-input=false']);
+            await runCommand('terraform', ['plan', '-out=tfplan', '-no-color', '-input=false']);
 
             // Capture JSON output separately
             let jsonOutput = '';

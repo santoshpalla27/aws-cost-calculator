@@ -61,7 +61,11 @@ const App: React.FC = () => {
 
             try {
                 const formData = new FormData();
-                tfFiles.forEach(file => formData.append('files', file));
+                tfFiles.forEach(file => {
+                    formData.append('files', file);
+                    // Send the relative path. If it's flat, use name. If from folder, use webkitRelativePath.
+                    formData.append('paths', file.webkitRelativePath || file.name);
+                });
 
                 // 1. Start Job
                 const startRes = await fetch('/api/generate-plan', {
