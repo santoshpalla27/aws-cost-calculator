@@ -1,0 +1,77 @@
+pipeline {
+    agent any
+    stages {
+        stage('Checkout Code') {
+            steps {
+                script {
+                    git branch: 'main', url: 'https://github.com/santoshpalla27/aws-cost-calculator.git'
+                }
+            }
+        }
+        stage('down') {
+            steps {
+                script {
+                    sh "docker compose down || true"
+                }
+            }
+        }
+
+        stage('clean') {
+            steps {
+                script {
+                    sh """
+                        docker builder prune -a -f
+                        docker volume prune -f
+                        docker container prune -f
+                        docker image prune -a -f
+                    """
+                }
+            }
+        }
+        stage('Inject .env (Secret File)') {
+            steps {
+                withCredentials([file(credentialsId: 'env-file', variable: 'ENVFILE')]) {
+                    sh '''
+                        # Fix workspace permissions
+                        chmod -R u+rwX .
+
+                        # Safely copy secret file to .env without Groovy interpolation
+                        cat "$ENVFILE" > .env
+                        
+                        # Restrict permissions for security (best only for docker-compose injecting doesnt work in conainers injecting)
+                        chmod 600 .env
+                        echo "[INFO] .env injected successfully"
+                    '''
+                }
+            }
+        }
+        stage('build') {
+            steps {
+                script {
+                    sh "docker compose build --no-cache"
+                }
+            }
+        }
+
+        stage('deploy') {
+            steps {
+                script {
+                    sh "docker compose up -d"
+                }
+            }
+        }
+
+        stage('test Connection') {
+            steps {
+                script {
+                    sh "docker compose ps"
+                }
+            }
+        }
+    }
+    post {
+        always {
+            sh "rm -f .env"   // Cleanup for safety
+        }
+    }
+}
