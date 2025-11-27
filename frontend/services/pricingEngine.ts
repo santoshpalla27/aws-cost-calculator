@@ -3,6 +3,7 @@ import { fetchPrice, getRegionLocation } from './pricingService';
 
 const HOURS_PER_MONTH = 730;
 
+// ==================== EC2 ====================
 const calculateEC2Cost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const instanceType = after.instance_type || 't3.micro';
@@ -87,6 +88,7 @@ const calculateEC2Cost = async (resource: TfResourceChange): Promise<CostItem> =
     };
 };
 
+// ==================== RDS ====================
 const calculateRDSCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const instanceClass = after.instance_class || 'db.t3.micro';
@@ -141,12 +143,12 @@ const calculateRDSCost = async (resource: TfResourceChange): Promise<CostItem> =
     };
 };
 
+// ==================== S3 ====================
 const calculateS3Cost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const bucketName = after.bucket || resource.name;
     
     const storageClass = after.lifecycle_rule?.[0]?.transition?.storage_class || 'STANDARD';
-    
     const estimatedGB = 100;
     
     const storageRates: Record<string, number> = {
@@ -174,6 +176,7 @@ const calculateS3Cost = async (resource: TfResourceChange): Promise<CostItem> =>
     };
 };
 
+// ==================== Lambda ====================
 const calculateLambdaCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const memory = after.memory_size || 128;
@@ -203,6 +206,7 @@ const calculateLambdaCost = async (resource: TfResourceChange): Promise<CostItem
     };
 };
 
+// ==================== DynamoDB ====================
 const calculateDynamoDBCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const billingMode = after.billing_mode || 'PROVISIONED';
@@ -242,6 +246,7 @@ const calculateDynamoDBCost = async (resource: TfResourceChange): Promise<CostIt
     }
 };
 
+// ==================== Load Balancer ====================
 const calculateLBCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const type = after.load_balancer_type || 'application';
@@ -269,6 +274,7 @@ const calculateLBCost = async (resource: TfResourceChange): Promise<CostItem> =>
     };
 };
 
+// ==================== NAT Gateway ====================
 const calculateNatGatewayCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const hourlyRate = 0.045;
     const dataRate = 0.045;
@@ -288,6 +294,7 @@ const calculateNatGatewayCost = async (resource: TfResourceChange): Promise<Cost
     };
 };
 
+// ==================== EKS ====================
 const calculateEKSCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const hourlyRate = 0.10;
 
@@ -304,6 +311,7 @@ const calculateEKSCost = async (resource: TfResourceChange): Promise<CostItem> =
     };
 };
 
+// ==================== ElastiCache ====================
 const calculateElastiCacheCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const after = resource.change.after || {};
     const nodeType = after.node_type || 'cache.t3.micro';
@@ -337,6 +345,7 @@ const calculateElastiCacheCost = async (resource: TfResourceChange): Promise<Cos
     };
 };
 
+// ==================== CloudFront ====================
 const calculateCloudFrontCost = async (resource: TfResourceChange): Promise<CostItem> => {
     const estimatedGB = 1000;
     const estimatedRequests = 10000000;
@@ -355,46 +364,259 @@ const calculateCloudFrontCost = async (resource: TfResourceChange): Promise<Cost
     };
 };
 
+// ==================== Route53 ====================
 const calculateRoute53Cost = async (resource: TfResourceChange): Promise<CostItem> => {
-    const after = resource.change.after || {};
-    const recordCount = Object.keys(after).filter(k => k.startsWith('record')).length || 25;
-    
     return {
         id: resource.address,
         resourceName: resource.name,
         resourceType: 'Route53 Hosted Zone',
         region: 'global',
-        monthlyCost: 0.50 + (recordCount * 0.40 / 1000000 * 1000000),
+        monthlyCost: 0.50,
         breakdown: [
-            { unit: 'zone', rate: 0.50, quantity: 1, description: 'Hosted Zone' },
-            { unit: 'queries', rate: 0.40 / 1000000, quantity: 1000000, description: 'Standard Queries (Estimated)' }
+            { unit: 'zone', rate: 0.50, quantity: 1, description: 'Hosted Zone' }
         ],
-        metadata: { recordCount }
+        metadata: {}
     };
 };
 
+// ==================== Auto Scaling Group ====================
+const calculateASGCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    const after = resource.change.after || {};
+    const minSize = after.min_size || 1;
+    const desiredCapacity = after.desired_capacity || minSize;
+    
+    // ASG itself is free, but we estimate EC2 costs
+    // We need the launch template/config to get instance type
+    const instanceType = 't3.micro'; // Default fallback
+
+    let hourlyRate = await fetchPrice({
+        serviceCode: 'AmazonEC2',
+        filters: {
+            'instanceType': instanceType,
+            'location': getRegionLocation('us-east-1'),
+            'tenancy': 'Shared',
+            'operatingSystem': 'Linux',
+            'preInstalledSw': 'NA',
+            'capacitystatus': 'Used'
+        },
+        resourceType: 'EC2 Instance'
+    });
+
+    if (hourlyRate === null) hourlyRate = 0.0116;
+
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: 'Auto Scaling Group',
+        region: 'us-east-1',
+        monthlyCost: hourlyRate * HOURS_PER_MONTH * desiredCapacity,
+        breakdown: [
+            { unit: 'instance-hours', rate: hourlyRate, quantity: HOURS_PER_MONTH * desiredCapacity, description: `EC2 Instances (${instanceType}) x ${desiredCapacity}` }
+        ],
+        metadata: { instanceType, desiredCapacity, note: 'ASG service is free, showing estimated EC2 costs' }
+    };
+};
+
+// ==================== CloudWatch Alarm ====================
+const calculateCloudWatchAlarmCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: 'CloudWatch Alarm',
+        region: 'us-east-1',
+        monthlyCost: 0.10,
+        breakdown: [
+            { unit: 'alarm', rate: 0.10, quantity: 1, description: 'Standard Metric Alarm' }
+        ],
+        metadata: {}
+    };
+};
+
+// ==================== Launch Template ====================
+const calculateLaunchTemplateCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: 'Launch Template',
+        region: 'us-east-1',
+        monthlyCost: 0,
+        breakdown: [
+            { unit: 'template', rate: 0, quantity: 1, description: 'Launch Template (Free)' }
+        ],
+        metadata: { note: 'Launch Templates are free - EC2 costs calculated separately' }
+    };
+};
+
+// ==================== Target Group ====================
+const calculateTargetGroupCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: 'Target Group',
+        region: 'us-east-1',
+        monthlyCost: 0,
+        breakdown: [
+            { unit: 'target-group', rate: 0, quantity: 1, description: 'Target Group (Free)' }
+        ],
+        metadata: { note: 'Target Groups are free - LB costs calculated separately' }
+    };
+};
+
+// ==================== LB Listener ====================
+const calculateLBListenerCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: 'LB Listener',
+        region: 'us-east-1',
+        monthlyCost: 0,
+        breakdown: [
+            { unit: 'listener', rate: 0, quantity: 1, description: 'LB Listener (Free)' }
+        ],
+        metadata: { note: 'Listeners are free - LB costs calculated separately' }
+    };
+};
+
+// ==================== EIP ====================
+const calculateEIPCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    const after = resource.change.after || {};
+    const isAttached = !!after.instance || !!after.network_interface;
+    
+    // Free when attached, $0.005/hr when not attached
+    const hourlyRate = isAttached ? 0 : 0.005;
+    
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: 'Elastic IP',
+        region: 'us-east-1',
+        monthlyCost: hourlyRate * HOURS_PER_MONTH,
+        breakdown: [
+            { unit: 'hours', rate: hourlyRate, quantity: HOURS_PER_MONTH, description: isAttached ? 'Attached (Free)' : 'Unattached' }
+        ],
+        metadata: { isAttached }
+    };
+};
+
+// ==================== Free/No-Cost Resources ====================
+const createFreeResource = (resource: TfResourceChange, displayType: string): CostItem => {
+    return {
+        id: resource.address,
+        resourceName: resource.name,
+        resourceType: displayType,
+        region: 'us-east-1',
+        monthlyCost: 0,
+        breakdown: [
+            { unit: 'resource', rate: 0, quantity: 1, description: `${displayType} (No charge)` }
+        ],
+        metadata: { note: 'This resource type has no direct cost' }
+    };
+};
+
+// ==================== Auto Scaling Policy ====================
+const calculateASGPolicyCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'Auto Scaling Policy');
+};
+
+// ==================== IAM Resources ====================
+const calculateIAMCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    const typeMap: Record<string, string> = {
+        'aws_iam_role': 'IAM Role',
+        'aws_iam_policy': 'IAM Policy',
+        'aws_iam_instance_profile': 'IAM Instance Profile',
+        'aws_iam_role_policy_attachment': 'IAM Policy Attachment'
+    };
+    return createFreeResource(resource, typeMap[resource.type] || 'IAM Resource');
+};
+
+// ==================== VPC Resources ====================
+const calculateVPCCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'VPC');
+};
+
+const calculateSubnetCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'Subnet');
+};
+
+const calculateInternetGatewayCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'Internet Gateway');
+};
+
+const calculateRouteTableCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'Route Table');
+};
+
+const calculateRouteTableAssociationCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'Route Table Association');
+};
+
+const calculateSecurityGroupCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'Security Group');
+};
+
+const calculateDBSubnetGroupCost = async (resource: TfResourceChange): Promise<CostItem> => {
+    return createFreeResource(resource, 'DB Subnet Group');
+};
+
+// ==================== Main Report Generation ====================
 export const generateCostReport = async (resources: TfResourceChange[]): Promise<CostReport> => {
     const items: CostItem[] = [];
     const errors: any[] = [];
     const summaryByService: Record<string, number> = {};
 
     const calculators: Record<string, (resource: TfResourceChange) => Promise<CostItem>> = {
+        // Compute
         'aws_instance': calculateEC2Cost,
+        'aws_autoscaling_group': calculateASGCost,
+        'aws_launch_template': calculateLaunchTemplateCost,
+        'aws_autoscaling_policy': calculateASGPolicyCost,
+        
+        // Database
         'aws_db_instance': calculateRDSCost,
-        'aws_s3_bucket': calculateS3Cost,
-        'aws_lambda_function': calculateLambdaCost,
+        'aws_db_subnet_group': calculateDBSubnetGroupCost,
+        'aws_elasticache_cluster': calculateElastiCacheCost,
         'aws_dynamodb_table': calculateDynamoDBCost,
+        
+        // Storage
+        'aws_s3_bucket': calculateS3Cost,
+        
+        // Serverless
+        'aws_lambda_function': calculateLambdaCost,
+        
+        // Networking
         'aws_lb': calculateLBCost,
         'aws_alb': calculateLBCost,
         'aws_nlb': calculateLBCost,
+        'aws_lb_target_group': calculateTargetGroupCost,
+        'aws_lb_listener': calculateLBListenerCost,
         'aws_nat_gateway': calculateNatGatewayCost,
+        'aws_eip': calculateEIPCost,
+        'aws_vpc': calculateVPCCost,
+        'aws_subnet': calculateSubnetCost,
+        'aws_internet_gateway': calculateInternetGatewayCost,
+        'aws_route_table': calculateRouteTableCost,
+        'aws_route_table_association': calculateRouteTableAssociationCost,
+        'aws_security_group': calculateSecurityGroupCost,
+        
+        // Container & Orchestration
         'aws_eks_cluster': calculateEKSCost,
-        'aws_elasticache_cluster': calculateElastiCacheCost,
+        
+        // CDN & DNS
         'aws_cloudfront_distribution': calculateCloudFrontCost,
-        'aws_route53_zone': calculateRoute53Cost
+        'aws_route53_zone': calculateRoute53Cost,
+        
+        // Monitoring
+        'aws_cloudwatch_metric_alarm': calculateCloudWatchAlarmCost,
+        
+        // IAM (All Free)
+        'aws_iam_role': calculateIAMCost,
+        'aws_iam_policy': calculateIAMCost,
+        'aws_iam_instance_profile': calculateIAMCost,
+        'aws_iam_role_policy_attachment': calculateIAMCost
     };
 
     const promises = resources.map(async (r) => {
+        // Skip deletions
         if (r.change.actions.includes('delete') && !r.change.actions.includes('create')) {
             return null;
         }
