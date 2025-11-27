@@ -97,17 +97,17 @@ export class RDSPricingService {
 
     // Determine the base price based on instance class
     const basePrice = priceMap[instanceClass] || 0.15; // Default to $0.15/hr if not found
-    
+
     // Adjust price based on engine
-    const engineMultiplier = engine.includes('postgres') || engine.includes('mysql') ? 1.0 : 
-                            engine.includes('oracle') ? 1.5 : 1.2;
-    
+    const engineMultiplier = engine.includes('postgres') || engine.includes('mysql') ? 1.0 :
+      engine.includes('oracle') ? 1.5 : 1.2;
+
     // Adjust based on region
     const regionMultiplier = region.startsWith('us-') ? 1.0 : 1.1;
-    
+
     // Multi-AZ doubles the cost
     const multiAZMultiplier = multiAZ ? 2.0 : 1.0;
-    
+
     return basePrice * engineMultiplier * regionMultiplier * multiAZMultiplier;
   }
 
@@ -117,7 +117,7 @@ export class RDSPricingService {
     region: string
   ): Promise<number> {
     // Storage pricing per GB-month
-    const storagePricePerGBMonth = {
+    const storagePricePerGBMonth: { [key: string]: number } = {
       'gp2': 0.10, // General purpose SSD
       'gp3': 0.08, // General purpose SSD (newer)
       'io1': 0.125, // Provisioned IOPS SSD
@@ -127,7 +127,7 @@ export class RDSPricingService {
     };
 
     const pricePerGB = storagePricePerGBMonth[storageType] || 0.10;
-    
+
     return storageSize * pricePerGB;
   }
 
@@ -137,7 +137,7 @@ export class RDSPricingService {
   ): Promise<number> {
     // Backup storage pricing per GB-month
     const backupPricePerGBMonth = 0.095; // Simplified backup price
-    
+
     return backupStorage * backupPricePerGBMonth;
   }
 }
