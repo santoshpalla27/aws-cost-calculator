@@ -16,11 +16,26 @@ export const parseTerraformPlan = (jsonContent: string): TfPlan | null => {
 };
 
 export const filterManagedResources = (plan: TfPlan): TfResourceChange[] => {
-    if (!plan.resource_changes) return [];
-    return plan.resource_changes.filter(r => 
-        (r.change.actions.includes('create') || r.change.actions.includes('update') || r.change.actions.includes('delete')) &&
-        r.type.startsWith('aws_')
-    );
+    if (!plan.resource_changes) {
+        console.warn("Plan has no resource_changes:", plan);
+        return [];
+    }
+
+    console.log("Raw Plan Resource Changes:", plan.resource_changes);
+
+    // Filter for managed resources (aws_*) that are being created, updated, or deleted.
+    // Terraform's 'resource_changes' array contains an entry for EACH instance of a resource.
+    // e.g. aws_instance.web[0], aws_instance.web[1] are separate entries.
+    const filtered = plan.resource_changes.filter(r => {
+        const isManaged = r.type.startsWith('aws_');
+        const isChange = r.change.actions.includes('create') ||
+            r.change.actions.includes('update') ||
+            r.change.actions.includes('delete');
+        return isManaged && isChange;
+    });
+
+    console.log(`Found ${filtered.length} managed resources.`);
+    return filtered;
 };
 
 // --- HCL Static Analysis Logic ---
@@ -37,13 +52,13 @@ export const parseHclFiles = (fileContents: string[]): TfResourceChange[] => {
     // Regex to find resource blocks: resource "type" "name" { ... }
     // Handles loose whitespace
     const resourceBlockRegex = /resource\s+"(aws_[\w]+)"\s+"([\w]+)"\s*\{/g;
-    
+
     let match;
     while ((match = resourceBlockRegex.exec(combinedContent)) !== null) {
         const type = match[1];
         const name = match[2];
         const startIndex = match.index + match[0].length;
-        
+
         // Extract the block content (string-aware brace matching)
         const blockContent = extractBlock(combinedContent, startIndex - 1); // Start from the opening brace
         const config = parseBlockAttributes(blockContent);
@@ -91,7 +106,7 @@ const extractBlock = (str: string, openBraceIndex: number): string => {
         }
         index++;
     }
-    
+
     // Return content inside the outer braces
     return str.substring(openBraceIndex + 1, index - 1);
 };
@@ -101,7 +116,7 @@ const extractBlock = (str: string, openBraceIndex: number): string => {
  */
 const parseBlockAttributes = (block: string): any => {
     const config: any = {};
-    
+
     // Clean comments (hash and double slash)
     const cleanBlock = block.replace(/#.*$/gm, '').replace(/\/\/.*$/gm, '');
 
@@ -126,7 +141,7 @@ const parseBlockAttributes = (block: string): any => {
             volume_type: 'gp3', // default
             volume_size: 8 // default
         }];
-        
+
         // Try to extract actual size if defined in root_block_device
         const volSize = cleanBlock.match(/volume_size\s*=\s*([0-9]+)/);
         if (volSize) {
