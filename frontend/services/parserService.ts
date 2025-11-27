@@ -31,6 +31,10 @@ export const filterManagedResources = (plan: TfPlan): TfResourceChange[] => {
         const isChange = r.change.actions.includes('create') ||
             r.change.actions.includes('update') ||
             r.change.actions.includes('delete');
+
+        // Explicitly allow supported types to avoid noise, or just allow all aws_
+        // For now, we allow all aws_ but the pricing engine will only pick up what it knows.
+        // However, to be safe and consistent with the user's request, let's ensure we don't filter them out.
         return isManaged && isChange;
     });
 
