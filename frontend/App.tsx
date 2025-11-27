@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { PlanUploader } from './components/PlanUploader';
 import { CostChart } from './components/CostChart';
+import { LogTerminal } from './components/LogTerminal';
 import { parseTerraformPlan, filterManagedResources, parseHclFiles } from './services/parserService';
 import { generateCostReport, generateDiffReport } from './services/pricingEngine';
 import { CostReport, DiffReport, ViewMode, TfResourceChange } from './types';
@@ -29,6 +30,9 @@ const App: React.FC = () => {
     // For Diff Mode (only supports JSON plans for diffs currently to ensure accuracy)
     const [tempOld, setTempOld] = useState<File[] | null>(null);
 
+    const [logs, setLogs] = useState<string[]>([]);
+    const [processingStatus, setProcessingStatus] = useState<'pending' | 'processing' | 'completed' | 'failed'>('pending');
+
     const processFiles = async (files: File[]): Promise<{ resources: TfResourceChange[], name: string, isStatic: boolean }> => {
         const jsonFile = files.find(f => f.name.endsWith('.json'));
         const tfFiles = files.filter(f => f.name.endsWith('.tf'));
@@ -50,39 +54,67 @@ const App: React.FC = () => {
             }
         }
 
-        // Priority 2: Terraform HCL Files (Backend Generation)
+        // Priority 2: Terraform HCL Files (Backend Generation with SSE)
         if (tfFiles.length > 0) {
+            setLogs([]);
+            setProcessingStatus('processing');
+
             try {
                 const formData = new FormData();
                 tfFiles.forEach(file => formData.append('files', file));
 
-                const response = await fetch('/api/generate-plan', {
+                // 1. Start Job
+                const startRes = await fetch('/api/generate-plan', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.details || 'Failed to generate plan');
-                }
+                if (!startRes.ok) throw new Error('Failed to start plan generation');
+                const { jobId } = await startRes.json();
 
-                const plan = await response.json();
-                return {
-                    resources: filterManagedResources(plan),
-                    name: `${tfFiles.length} Terraform Files (Generated Plan)`,
-                    isStatic: false // Now it's dynamic!
-                };
+                // 2. Stream Logs
+                return new Promise((resolve, reject) => {
+                    const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+
+                    eventSource.onmessage = (event) => {
+                        const { type, data } = JSON.parse(event.data);
+
+                        if (type === 'log') {
+                            setLogs(prev => [...prev, data]);
+                        } else if (type === 'complete') {
+                            eventSource.close();
+                            setProcessingStatus('completed');
+                            resolve({
+                                resources: filterManagedResources(data),
+                                name: `${tfFiles.length} Terraform Files (Generated Plan)`,
+                                isStatic: false
+                            });
+                        } else if (type === 'error') {
+                            eventSource.close();
+                            setProcessingStatus('failed');
+                            reject(new Error(data));
+                        }
+                    };
+
+                    eventSource.onerror = (err) => {
+                        console.error("EventSource failed:", err);
+                        eventSource.close();
+                        reject(new Error("Connection lost"));
+                    };
+                });
 
             } catch (error) {
-                console.error("Backend plan generation failed, falling back to static analysis:", error);
-                // Fallback to static analysis
-                const contents = await Promise.all(tfFiles.map(f => f.text()));
-                const resources = parseHclFiles(contents);
-                return {
-                    resources,
-                    name: tfFiles.length === 1 ? tfFiles[0].name : `${tfFiles.length} Terraform Files`,
-                    isStatic: true
-                };
+                console.error("Backend plan generation failed:", error);
+                setProcessingStatus('failed');
+                // Fallback to static analysis if backend generation fails entirely
+                // This part was removed by the instruction, but keeping the original fallback logic here
+                // as the instruction only replaced the try block content.
+                // Re-adding the static analysis fallback as it was part of the original logic for tfFiles
+                // when backend generation failed. The instruction only replaced the *successful* path
+                // and the immediate catch for the SSE part, not the overall fallback.
+                // However, the instruction explicitly removed the fallback from the catch block.
+                // Sticking to the instruction and removing the fallback from this catch.
+                throw error;
             }
         }
 
@@ -167,10 +199,16 @@ const App: React.FC = () => {
                 )}
 
                 {isLoading && (
-                    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
-                        <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-                        <p className="text-xl font-semibold text-white">Fetching Real-time Pricing from AWS...</p>
-                        <p className="text-sm text-slate-400 mt-2">Connecting to local pricing engine...</p>
+                    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4">
+                        {processingStatus !== 'pending' ? (
+                            <LogTerminal logs={logs} status={processingStatus} />
+                        ) : (
+                            <>
+                                <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
+                                <p className="text-xl font-semibold text-white">Fetching Real-time Pricing from AWS...</p>
+                                <p className="text-sm text-slate-400 mt-2">Connecting to local pricing engine...</p>
+                            </>
+                        )}
                     </div>
                 )}
 

@@ -2,7 +2,7 @@
  * OpenCost Backend Service
  * 
  * Usage:
- * 1. Install dependencies: npm install express cors @aws-sdk/client-pricing dotenv
+ * 1. Install dependencies: npm install express cors @aws-sdk/client-pricing dotenv multer
  * 2. Set AWS Credentials in .env or environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)
  * 3. Run: node server.js
  */
@@ -10,6 +10,10 @@
 const express = require('express');
 const cors = require('cors');
 const { PricingClient, GetProductsCommand } = require('@aws-sdk/client-pricing');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,9 +21,28 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Initialize AWS Pricing Client (Endpoint is usually us-east-1 or ap-south-1 for global pricing)
+// Initialize AWS Pricing Client
 const client = new PricingClient({ region: 'us-east-1' });
 
+// Ensure uploads directory exists
+if (!fs.existsSync('uploads')) {
+    fs.mkdirSync('uploads');
+}
+
+const upload = multer({ dest: 'uploads/' });
+
+// In-memory job store
+const jobs = {};
+
+// Helper to broadcast to SSE clients
+const broadcast = (jobId, type, data) => {
+    const job = jobs[jobId];
+    if (!job) return;
+    const message = `data: ${JSON.stringify({ type, data })}\n\n`;
+    job.clients.forEach(client => client.write(message));
+};
+
+// --- AWS Pricing Endpoint ---
 app.post('/api/pricing', async (req, res) => {
     const { serviceCode, filters } = req.body;
 
@@ -28,7 +51,6 @@ app.post('/api/pricing', async (req, res) => {
     }
 
     try {
-        // Convert filters object to AWS Filters array format
         const awsFilters = Object.entries(filters).map(([key, value]) => ({
             Type: 'TERM_MATCH',
             Field: key,
@@ -47,11 +69,7 @@ app.post('/api/pricing', async (req, res) => {
             return res.status(404).json({ error: 'No pricing found for criteria' });
         }
 
-        // Parse the weird stringified JSON AWS returns
         const priceItem = JSON.parse(response.PriceList[0]);
-
-        // Navigate the complex OnDemand pricing structure
-        // structure: terms -> OnDemand -> [SKU.OfferTermCode] -> priceDimensions -> [key] -> pricePerUnit -> USD
         const terms = priceItem.terms?.OnDemand;
         if (!terms) {
             return res.status(404).json({ error: 'No OnDemand terms found' });
@@ -77,63 +95,124 @@ app.post('/api/pricing', async (req, res) => {
     }
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', service: 'OpenCost Pricing Engine' });
-});
-
-const fs = require('fs');
-const path = require('path');
-const { exec } = require('child_process');
-const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
-
-// Ensure uploads directory exists
-if (!fs.existsSync('uploads')) {
-    fs.mkdirSync('uploads');
-}
-
-app.post('/api/generate-plan', upload.array('files'), async (req, res) => {
+// --- Terraform Plan Generation (Async SSE) ---
+app.post('/api/generate-plan', upload.array('files'), (req, res) => {
     if (!req.files || req.files.length === 0) {
         return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    const workDir = path.join(__dirname, 'uploads', `job-${Date.now()}`);
+    const jobId = `job-${Date.now()}`;
+    const workDir = path.join(__dirname, 'uploads', jobId);
     fs.mkdirSync(workDir);
 
-    try {
-        // Move files to workDir
-        for (const file of req.files) {
-            const destPath = path.join(workDir, file.originalname);
-            fs.renameSync(file.path, destPath);
-        }
+    // Initialize job
+    jobs[jobId] = {
+        id: jobId,
+        status: 'pending',
+        logs: [],
+        clients: [],
+        result: null
+    };
 
-        // Execute Terraform commands
-        const execPromise = (cmd) => new Promise((resolve, reject) => {
-            exec(cmd, { cwd: workDir }, (error, stdout, stderr) => {
-                if (error) reject({ error, stderr });
-                else resolve(stdout);
+    // Start background processing
+    (async () => {
+        try {
+            // Move files
+            for (const file of req.files) {
+                const destPath = path.join(workDir, file.originalname);
+                fs.renameSync(file.path, destPath);
+            }
+            broadcast(jobId, 'log', 'Files uploaded successfully.');
+
+            const runCommand = (cmd, args) => new Promise((resolve, reject) => {
+                broadcast(jobId, 'log', `Running: ${cmd} ${args.join(' ')}`);
+
+                const proc = spawn(cmd, args, { cwd: workDir });
+
+                proc.stdout.on('data', (data) => {
+                    const lines = data.toString().split('\n');
+                    lines.forEach(line => {
+                        if (line.trim()) broadcast(jobId, 'log', line.trim());
+                    });
+                });
+
+                proc.stderr.on('data', (data) => {
+                    const lines = data.toString().split('\n');
+                    lines.forEach(line => {
+                        if (line.trim()) broadcast(jobId, 'log', `[STDERR] ${line.trim()}`);
+                    });
+                });
+
+                proc.on('close', (code) => {
+                    if (code === 0) resolve();
+                    else reject(new Error(`Command failed with code ${code}`));
+                });
             });
-        });
 
-        await execPromise('terraform init');
-        await execPromise('terraform plan -out=tfplan');
-        const jsonOutput = await execPromise('terraform show -json tfplan');
+            await runCommand('terraform', ['init', '-no-color']);
+            await runCommand('terraform', ['plan', '-out=tfplan', '-no-color']);
 
-        const plan = JSON.parse(jsonOutput);
-        res.json(plan);
+            // Capture JSON output separately
+            let jsonOutput = '';
+            const showProc = spawn('terraform', ['show', '-json', 'tfplan'], { cwd: workDir });
 
-    } catch (error) {
-        console.error('Terraform Execution Error:', error);
-        res.status(500).json({
-            error: 'Failed to generate plan',
-            details: error.stderr || error.message
-        });
-    } finally {
-        // Cleanup
-        fs.rm(workDir, { recursive: true, force: true }, (err) => {
-            if (err) console.error('Cleanup Error:', err);
-        });
+            showProc.stdout.on('data', (data) => jsonOutput += data.toString());
+
+            await new Promise((resolve, reject) => {
+                showProc.on('close', (code) => {
+                    if (code === 0) resolve();
+                    else reject(new Error(`Show failed with code ${code}`));
+                });
+            });
+
+            const plan = JSON.parse(jsonOutput);
+            jobs[jobId].status = 'completed';
+            jobs[jobId].result = plan;
+            broadcast(jobId, 'complete', plan);
+
+        } catch (error) {
+            console.error(`Job ${jobId} failed:`, error);
+            jobs[jobId].status = 'failed';
+            broadcast(jobId, 'error', error.message);
+        } finally {
+            // Cleanup clients
+            jobs[jobId].clients.forEach(c => c.end());
+            jobs[jobId].clients = [];
+
+            // Cleanup files
+            fs.rm(workDir, { recursive: true, force: true }, (err) => {
+                if (err) console.error('Cleanup Error:', err);
+            });
+        }
+    })();
+
+    res.json({ jobId });
+});
+
+app.get('/api/jobs/:jobId/stream', (req, res) => {
+    const { jobId } = req.params;
+    const job = jobs[jobId];
+
+    if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
     }
+
+    // SSE Headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Add client to job
+    job.clients.push(res);
+
+    // Remove client on close
+    req.on('close', () => {
+        job.clients = job.clients.filter(c => c !== res);
+    });
+});
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', service: 'OpenCost Pricing Engine' });
 });
 
 app.listen(PORT, () => {
