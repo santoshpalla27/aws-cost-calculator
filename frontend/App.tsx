@@ -195,26 +195,29 @@ const App: React.FC = () => {
             {/* Main Content */}
             <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
 
-                {error && (
-                    <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-lg mb-6 flex items-center gap-3 text-red-400">
-                        <ServerCrash className="w-5 h-5" />
-                        <span>{error}</span>
+            {error && (
+                <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-lg mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3 text-red-400">
+                    <ServerCrash className="w-5 h-5 flex-shrink-0" />
+                    <div className="flex-1">
+                        <p className="font-semibold">Error:</p>
+                        <p className="text-sm">{error}</p>
                     </div>
-                )}
+                </div>
+            )}
 
-                {isLoading && (
-                    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4">
-                        {processingStatus !== 'pending' ? (
-                            <LogTerminal logs={logs} status={processingStatus} />
-                        ) : (
-                            <>
-                                <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-                                <p className="text-xl font-semibold text-white">Fetching Real-time Pricing from AWS...</p>
-                                <p className="text-sm text-slate-400 mt-2">Connecting to local pricing engine...</p>
-                            </>
-                        )}
-                    </div>
-                )}
+            {isLoading && (
+                <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4">
+                    {processingStatus !== 'pending' ? (
+                        <LogTerminal logs={logs} status={processingStatus} />
+                    ) : (
+                        <>
+                            <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
+                            <p className="text-xl font-semibold text-white">Fetching Real-time Pricing from AWS...</p>
+                            <p className="text-sm text-slate-400 mt-2">Connecting to local pricing engine...</p>
+                        </>
+                    )}
+                </div>
+            )}
 
                 {viewMode === ViewMode.UPLOAD && (
                     <div className="max-w-2xl mx-auto space-y-12">
@@ -287,6 +290,28 @@ const App: React.FC = () => {
                                         You uploaded raw Terraform files. This estimation relies on static analysis and may ignore variables, modules, and complex logic.
                                         For precise accuracy, use <code>terraform show -json</code>.
                                     </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {report.errors && report.errors.length > 0 && (
+                            <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-start gap-3">
+                                <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                                <div>
+                                    <h4 className="text-red-400 font-semibold text-sm">Partial Pricing Data</h4>
+                                    <p className="text-slate-400 text-xs mt-1">
+                                        {report.errors.length} resource(s) could not be priced. Check console for details.
+                                    </p>
+                                    <details className="text-xs text-slate-500 mt-2 cursor-pointer">
+                                        <summary className="text-red-300 hover:text-red-200">View Errors</summary>
+                                        <ul className="list-disc list-inside mt-2 space-y-1">
+                                            {report.errors.map((err, i) => (
+                                                <li key={i} className="text-slate-400">
+                                                    <strong>{err.resource}</strong>: {err.error}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </details>
                                 </div>
                             </div>
                         )}
@@ -374,7 +399,11 @@ const App: React.FC = () => {
                                                         </td>
                                                         <td className="px-6 py-4 text-right">
                                                             <div className="group relative inline-block">
-                                                                <AlertTriangle className="w-4 h-4 text-amber-500/50 hover:text-amber-500 cursor-help" />
+                                                                {item.metadata?.note ? (
+                                                                    <AlertTriangle className="w-4 h-4 text-amber-500/50 hover:text-amber-500 cursor-help" />
+                                                                ) : (
+                                                                    <CheckCircle className="w-4 h-4 text-emerald-500/50" />
+                                                                )}
                                                                 <div className="absolute right-0 w-64 p-4 bg-slate-900 border border-slate-700 rounded-lg shadow-xl invisible group-hover:visible z-10 top-full mt-2">
                                                                     <p className="text-xs font-bold text-slate-300 mb-2">Calculation Breakdown</p>
                                                                     <ul className="space-y-1 text-xs text-slate-400">
@@ -384,6 +413,12 @@ const App: React.FC = () => {
                                                                                 <span className="font-mono text-slate-200">${(bd.rate * bd.quantity).toFixed(2)}</span>
                                                                             </li>
                                                                         ))}
+                                                                        {item.metadata?.note && (
+                                                                            <li className="flex justify-between border-t border-slate-700 mt-2 pt-2 text-amber-400 italic">
+                                                                                <span>Note:</span>
+                                                                                <span>{item.metadata.note}</span>
+                                                                            </li>
+                                                                        )}
                                                                     </ul>
                                                                 </div>
                                                             </div>
