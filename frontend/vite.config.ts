@@ -29,6 +29,9 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       }
+    },
+    css: {
+      postcss: './postcss.config.js',
     }
   };
 });

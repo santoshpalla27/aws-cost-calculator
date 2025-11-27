@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { PlanUploader } from './components/PlanUploader';
 import { CostChart } from './components/CostChart';
 import { LogTerminal } from './components/LogTerminal';
-import { parseTerraformPlan, filterManagedResources, parseHclFiles } from './services/parserService';
+import { parseTerraformPlan, filterManagedResources } from './services/parserService';
 import { generateCostReport, generateDiffReport } from './services/pricingEngine';
 import { CostReport, DiffReport, ViewMode, TfResourceChange } from './types';
 import {
@@ -14,8 +14,9 @@ import {
     Github,
     Loader2,
     ServerCrash,
-    FileCode,
-    FileJson
+    FileJson,
+    XCircle,
+    CheckCircle
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -25,19 +26,14 @@ const App: React.FC = () => {
     const [fileName, setFileName] = useState<string>('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [isStaticAnalysis, setIsStaticAnalysis] = useState(false);
-
-    // For Diff Mode (only supports JSON plans for diffs currently to ensure accuracy)
     const [tempOld, setTempOld] = useState<File[] | null>(null);
-
     const [logs, setLogs] = useState<string[]>([]);
     const [processingStatus, setProcessingStatus] = useState<'pending' | 'processing' | 'completed' | 'failed'>('pending');
 
-    const processFiles = async (files: File[]): Promise<{ resources: TfResourceChange[], name: string, isStatic: boolean }> => {
+    const processFiles = async (files: File[]): Promise<{ resources: TfResourceChange[], name: string }> => {
         const jsonFile = files.find(f => f.name.endsWith('.json'));
         const tfFiles = files.filter(f => f.name.endsWith('.tf'));
 
-        // Priority 1: JSON Plan
         if (jsonFile) {
             try {
                 const content = await jsonFile.text();
@@ -45,16 +41,14 @@ const App: React.FC = () => {
                 if (plan) {
                     return {
                         resources: filterManagedResources(plan),
-                        name: jsonFile.name,
-                        isStatic: false
+                        name: jsonFile.name
                     };
                 }
             } catch (e) {
-                console.warn("Failed to parse JSON, falling back to TF search if available");
+                console.warn("Failed to parse JSON");
             }
         }
 
-        // Priority 2: Terraform HCL Files (Backend Generation with SSE)
         if (tfFiles.length > 0) {
             setLogs([]);
             setProcessingStatus('processing');
@@ -63,11 +57,9 @@ const App: React.FC = () => {
                 const formData = new FormData();
                 tfFiles.forEach(file => {
                     formData.append('files', file);
-                    // Send the relative path. If it's flat, use name. If from folder, use webkitRelativePath.
                     formData.append('paths', file.webkitRelativePath || file.name);
                 });
 
-                // 1. Start Job
                 const startRes = await fetch('/api/generate-plan', {
                     method: 'POST',
                     body: formData
@@ -76,7 +68,6 @@ const App: React.FC = () => {
                 if (!startRes.ok) throw new Error('Failed to start plan generation');
                 const { jobId } = await startRes.json();
 
-                // 2. Stream Logs
                 return new Promise((resolve, reject) => {
                     const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
 
@@ -90,8 +81,7 @@ const App: React.FC = () => {
                             setProcessingStatus('completed');
                             resolve({
                                 resources: filterManagedResources(data),
-                                name: `${tfFiles.length} Terraform Files (Generated Plan)`,
-                                isStatic: false
+                                name: `${tfFiles.length} Terraform Files (Generated Plan)`
                             });
                         } else if (type === 'error') {
                             eventSource.close();
@@ -100,24 +90,13 @@ const App: React.FC = () => {
                         }
                     };
 
-                    eventSource.onerror = (err) => {
-                        console.error("EventSource failed:", err);
+                    eventSource.onerror = () => {
                         eventSource.close();
                         reject(new Error("Connection lost"));
                     };
                 });
-
             } catch (error) {
-                console.error("Backend plan generation failed:", error);
                 setProcessingStatus('failed');
-                // Fallback to static analysis if backend generation fails entirely
-                // This part was removed by the instruction, but keeping the original fallback logic here
-                // as the instruction only replaced the try block content.
-                // Re-adding the static analysis fallback as it was part of the original logic for tfFiles
-                // when backend generation failed. The instruction only replaced the *successful* path
-                // and the immediate catch for the SSE part, not the overall fallback.
-                // However, the instruction explicitly removed the fallback from the catch block.
-                // Sticking to the instruction and removing the fallback from this catch.
                 throw error;
             }
         }
@@ -130,14 +109,11 @@ const App: React.FC = () => {
         setError(null);
         try {
             const result = await processFiles(files);
-            setIsStaticAnalysis(result.isStatic);
-
             const costReport = await generateCostReport(result.resources);
             setReport(costReport);
             setFileName(result.name);
             setViewMode(ViewMode.REPORT);
         } catch (err: any) {
-            console.error(err);
             setError(err.message || "Failed to generate report. Ensure backend is running.");
         } finally {
             setIsLoading(false);
@@ -151,14 +127,10 @@ const App: React.FC = () => {
             const oldResult = await processFiles(oldFiles);
             const newResult = await processFiles(newFiles);
 
-            // Static analysis warning applies if either side is static
-            setIsStaticAnalysis(oldResult.isStatic || newResult.isStatic);
-
             const diff = await generateDiffReport(oldResult.resources, newResult.resources);
             setDiffReport(diff);
             setViewMode(ViewMode.DIFF);
         } catch (err: any) {
-            console.error(err);
             setError(err.message || "Failed to generate diff.");
         } finally {
             setIsLoading(false);
@@ -194,42 +166,41 @@ const App: React.FC = () => {
 
             {/* Main Content */}
             <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
-
-            {error && (
-                <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-lg mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3 text-red-400">
-                    <ServerCrash className="w-5 h-5 flex-shrink-0" />
-                    <div className="flex-1">
-                        <p className="font-semibold">Error:</p>
-                        <p className="text-sm">{error}</p>
+                {error && (
+                    <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-lg mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3 text-red-400">
+                        <ServerCrash className="w-5 h-5 flex-shrink-0" />
+                        <div className="flex-1">
+                            <p className="font-semibold">Error:</p>
+                            <p className="text-sm">{error}</p>
+                        </div>
                     </div>
-                </div>
-            )}
+                )}
 
-            {isLoading && (
-                <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4">
-                    {processingStatus !== 'pending' ? (
-                        <LogTerminal logs={logs} status={processingStatus} />
-                    ) : (
-                        <>
-                            <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-                            <p className="text-xl font-semibold text-white">Fetching Real-time Pricing from AWS...</p>
-                            <p className="text-sm text-slate-400 mt-2">Connecting to local pricing engine...</p>
-                        </>
-                    )}
-                </div>
-            )}
+                {isLoading && (
+                    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center p-4">
+                        {processingStatus !== 'pending' ? (
+                            <LogTerminal logs={logs} status={processingStatus} />
+                        ) : (
+                            <>
+                                <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
+                                <p className="text-xl font-semibold text-white">Fetching Real-time Pricing from AWS...</p>
+                                <p className="text-sm text-slate-400 mt-2">Connecting to pricing engine...</p>
+                            </>
+                        )}
+                    </div>
+                )}
 
                 {viewMode === ViewMode.UPLOAD && (
                     <div className="max-w-2xl mx-auto space-y-12">
                         <div className="text-center space-y-4">
                             <h2 className="text-3xl font-bold text-white">Estimate Infrastructure Costs</h2>
                             <p className="text-slate-400 text-lg">
-                                Upload your Terraform <strong>Plan JSON</strong> or <strong>Code Folder</strong> to get an instant cost breakdown using <span className="text-blue-400 font-semibold">Real-time AWS Pricing API</span>.
+                                Upload Terraform Plan JSON or Code Folder for instant cost analysis
                             </p>
                             <div className="inline-block bg-slate-800 px-4 py-2 rounded-full border border-slate-700">
                                 <p className="text-xs text-slate-400 flex items-center gap-2">
                                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                                    Requires <code>node server.js</code> running locally
+                                    Real-time AWS Pricing API integration
                                 </p>
                             </div>
                         </div>
@@ -264,16 +235,16 @@ const App: React.FC = () => {
                                 <div className="grid grid-cols-2 gap-4">
                                     <PlanUploader
                                         onUpload={(f) => setTempOld(f)}
-                                        label="Old Plan (JSON/TF)"
+                                        label="Old Plan"
                                         allowMultiple={true}
                                     />
                                     <PlanUploader
                                         onUpload={(f) => tempOld && handleDiffUpload(tempOld, f)}
-                                        label="New Plan (JSON/TF)"
+                                        label="New Plan"
                                         allowMultiple={true}
                                     />
                                 </div>
-                                {!tempOld && <p className="text-xs text-slate-500 mt-2 text-center">Upload 'Old Plan' first to enable 'New Plan' upload.</p>}
+                                {!tempOld && <p className="text-xs text-slate-500 mt-2 text-center">Upload 'Old Plan' first</p>}
                             </div>
                         </div>
                     </div>
@@ -281,29 +252,16 @@ const App: React.FC = () => {
 
                 {viewMode === ViewMode.REPORT && report && (
                     <div className="space-y-8 animate-fade-in">
-                        {isStaticAnalysis && (
-                            <div className="bg-amber-500/10 border border-amber-500/50 p-4 rounded-xl flex items-start gap-3">
-                                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                                <div>
-                                    <h4 className="text-amber-400 font-semibold text-sm">Static Code Analysis Mode</h4>
-                                    <p className="text-slate-400 text-xs mt-1">
-                                        You uploaded raw Terraform files. This estimation relies on static analysis and may ignore variables, modules, and complex logic.
-                                        For precise accuracy, use <code>terraform show -json</code>.
-                                    </p>
-                                </div>
-                            </div>
-                        )}
-
                         {report.errors && report.errors.length > 0 && (
-                            <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-start gap-3">
-                                <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                            <div className="bg-amber-500/10 border border-amber-500/50 p-4 rounded-xl flex items-start gap-3">
+                                <XCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
                                 <div>
-                                    <h4 className="text-red-400 font-semibold text-sm">Partial Pricing Data</h4>
+                                    <h4 className="text-amber-400 font-semibold text-sm">Partial Pricing Data</h4>
                                     <p className="text-slate-400 text-xs mt-1">
                                         {report.errors.length} resource(s) could not be priced. Check console for details.
                                     </p>
                                     <details className="text-xs text-slate-500 mt-2 cursor-pointer">
-                                        <summary className="text-red-300 hover:text-red-200">View Errors</summary>
+                                        <summary className="text-amber-300 hover:text-amber-200">View Errors</summary>
                                         <ul className="list-disc list-inside mt-2 space-y-1">
                                             {report.errors.map((err, i) => (
                                                 <li key={i} className="text-slate-400">
@@ -329,7 +287,7 @@ const App: React.FC = () => {
                                 <p className="text-sm text-slate-400 font-medium">Total Resources</p>
                                 <div className="mt-2 flex items-baseline gap-2">
                                     <span className="text-4xl font-bold text-blue-400">{report.items.length}</span>
-                                    <span className="text-sm text-slate-500">Managed</span>
+                                    <span className="text-sm text-slate-500">Priced</span>
                                 </div>
                             </div>
                             <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
@@ -364,7 +322,7 @@ const App: React.FC = () => {
                                 <div className="p-6 border-b border-slate-700 flex justify-between items-center">
                                     <h3 className="text-lg font-semibold text-white">Resource Breakdown</h3>
                                     <div className="flex items-center gap-2 text-xs bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full">
-                                        {isStaticAnalysis ? <FileCode className="w-3 h-3" /> : <FileJson className="w-3 h-3" />}
+                                        <FileJson className="w-3 h-3" />
                                         {fileName}
                                     </div>
                                 </div>
@@ -414,7 +372,7 @@ const App: React.FC = () => {
                                                                             </li>
                                                                         ))}
                                                                         {item.metadata?.note && (
-                                                                            <li className="flex justify-between border-t border-slate-700 mt-2 pt-2 text-amber-400 italic">
+                                                                            <li className="flex justify-between border-t border-slate-700 pt-2 mt-2">
                                                                                 <span>Note:</span>
                                                                                 <span>{item.metadata.note}</span>
                                                                             </li>
@@ -436,19 +394,6 @@ const App: React.FC = () => {
 
                 {viewMode === ViewMode.DIFF && diffReport && (
                     <div className="space-y-8 animate-fade-in">
-                        {isStaticAnalysis && (
-                            <div className="bg-amber-500/10 border border-amber-500/50 p-4 rounded-xl flex items-start gap-3">
-                                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                                <div>
-                                    <h4 className="text-amber-400 font-semibold text-sm">Static Code Analysis Mode</h4>
-                                    <p className="text-slate-400 text-xs mt-1">
-                                        One or both of your inputs were raw Terraform files.
-                                        For precise accuracy, use <code>terraform show -json</code>.
-                                    </p>
-                                </div>
-                            </div>
-                        )}
-
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
                                 <p className="text-sm text-slate-400 font-medium">Original Cost</p>
@@ -537,7 +482,6 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 )}
-
             </main>
         </div>
     );
