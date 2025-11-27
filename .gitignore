@@ -109,3 +109,5 @@ yarn.lock
 *.swp
 *.swo
 *~
+combine_files.ps1
+combined-text.txt
