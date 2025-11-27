@@ -38,6 +38,12 @@ const jobs = {};
 const broadcast = (jobId, type, data) => {
     const job = jobs[jobId];
     if (!job) return;
+
+    // Store log history
+    if (type === 'log') {
+        job.logs.push(data);
+    }
+
     const message = `data: ${JSON.stringify({ type, data })}\n\n`;
     job.clients.forEach(client => client.write(message));
 };
@@ -136,10 +142,37 @@ app.post('/api/generate-plan', upload.array('files'), (req, res) => {
             }
             broadcast(jobId, 'log', 'Files uploaded and directory structure reconstructed.');
 
+            // --- Detect Root Directory ---
+            // Find the directory containing main.tf, or fallback to workDir
+            let tfRoot = workDir;
+
+            const findTfRoot = (dir) => {
+                const files = fs.readdirSync(dir);
+                if (files.includes('main.tf')) return dir;
+
+                for (const file of files) {
+                    const fullPath = path.join(dir, file);
+                    if (fs.statSync(fullPath).isDirectory()) {
+                        const found = findTfRoot(fullPath);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+
+            const detectedRoot = findTfRoot(workDir);
+            if (detectedRoot) {
+                tfRoot = detectedRoot;
+                broadcast(jobId, 'log', `Detected Terraform root at: ${path.relative(workDir, tfRoot) || '.'}`);
+            } else {
+                broadcast(jobId, 'log', 'No main.tf found. Using root directory.');
+            }
+            // -----------------------------
+
             const runCommand = (cmd, args) => new Promise((resolve, reject) => {
                 broadcast(jobId, 'log', `Running: ${cmd} ${args.join(' ')}`);
 
-                const proc = spawn(cmd, args, { cwd: workDir });
+                const proc = spawn(cmd, args, { cwd: tfRoot });
 
                 proc.stdout.on('data', (data) => {
                     const lines = data.toString().split('\n');
@@ -166,7 +199,7 @@ app.post('/api/generate-plan', upload.array('files'), (req, res) => {
 
             // Capture JSON output separately
             let jsonOutput = '';
-            const showProc = spawn('terraform', ['show', '-json', 'tfplan'], { cwd: workDir });
+            const showProc = spawn('terraform', ['show', '-json', 'tfplan'], { cwd: tfRoot });
 
             showProc.stdout.on('data', (data) => jsonOutput += data.toString());
 
@@ -213,6 +246,13 @@ app.get('/api/jobs/:jobId/stream', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+
+    // Replay existing logs
+    if (job.logs && job.logs.length > 0) {
+        job.logs.forEach(log => {
+            res.write(`data: ${JSON.stringify({ type: 'log', data: log })}\n\n`);
+        });
+    }
 
     // Add client to job
     job.clients.push(res);
