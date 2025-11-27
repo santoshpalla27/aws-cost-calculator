@@ -21,6 +21,7 @@ export interface RegisterResult {
     email: string;
     role: string;
   };
+  token?: string;
   error?: string;
 }
 
@@ -42,13 +43,13 @@ export class AuthService {
 
       // Generate JWT token
       const token = jwt.sign(
-        { 
-          userId: user.id, 
-          email: user.email, 
-          role: user.role 
+        {
+          userId: user.id,
+          email: user.email,
+          role: user.role
         },
         config.jwtSecret,
-        { expiresIn: config.jwtExpiresIn }
+        { expiresIn: config.jwtExpiresIn as any }
       );
 
       return {
@@ -86,13 +87,13 @@ export class AuthService {
 
       // Generate JWT token
       const token = jwt.sign(
-        { 
-          userId: user.id, 
-          email: user.email, 
-          role: user.role 
+        {
+          userId: user.id,
+          email: user.email,
+          role: user.role
         },
         config.jwtSecret,
-        { expiresIn: config.jwtExpiresIn }
+        { expiresIn: config.jwtExpiresIn as any }
       );
 
       return {
