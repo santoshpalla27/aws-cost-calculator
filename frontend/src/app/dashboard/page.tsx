@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Header from '../../components/layout/Header';
+import AppHeader from '../../components/layout/AppHeader';
 import { CostOverview } from '@/components/dashboard/CostOverview';
 import { TopResources } from '@/components/dashboard/TopResources';
 import { CostTrends } from '@/components/dashboard/CostTrends';
@@ -9,7 +9,7 @@ import { CostTrends } from '@/components/dashboard/CostTrends';
 export default function DashboardPage() {
   return (
     <div>
-      <Header />
+      <AppHeader />
       <main className="container mx-auto py-8 px-4">
         <div className="max-w-6xl mx-auto">
           <div className="mb-8">
