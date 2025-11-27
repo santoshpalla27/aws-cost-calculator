@@ -1,205 +1,126 @@
+import { User } from '../models/User';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { AppDataSource } from '../config/database';
-import { User, UserRole } from '../models/User';
-import { RefreshToken } from '../models/RefreshToken';
-import { config } from '../config';
-import { logger } from '../utils/logger';
+import { config } from '../config/database';
 
-interface RegisterData {
+export interface LoginResult {
+  success: boolean;
+  token?: string;
+  user?: {
+    id: string;
     email: string;
-    password: string;
-    firstName?: string;
-    lastName?: string;
+    role: string;
+  };
+  error?: string;
 }
 
-interface AuthResponse {
-    user: {
-        id: string;
-        email: string;
-        firstName: string;
-        lastName: string;
-        role: string;
-    };
-    accessToken: string;
-    refreshToken: string;
+export interface RegisterResult {
+  success: boolean;
+  user?: {
+    id: string;
+    email: string;
+    role: string;
+  };
+  error?: string;
 }
 
-class AuthService {
-    private userRepository = AppDataSource.getRepository(User);
-    private refreshTokenRepository = AppDataSource.getRepository(RefreshToken);
+export class AuthService {
+  static async login(email: string, password: string): Promise<LoginResult> {
+    try {
+      // Find user by email
+      const user = await User.findOne({ where: { email } });
 
-    async register(data: RegisterData): Promise<span><span style="color: rgb(150, 34, 73); font-weight: bold;" >& lt; authresponse & gt; </span><span style="color: black; font-weight: normal;"> {
-// Check if user exists
-const existingUser = await this.userRepository.findOne({
-    where: { email: data.email }
-});
+      if (!user) {
+        return { success: false, error: 'Invalid email or password' };
+      }
 
-if (existingUser) {
-    throw new Error('User already exists');
-}
+      // Check password
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return { success: false, error: 'Invalid email or password' };
+      }
 
-// Hash password
-const hashedPassword = await bcrypt.hash(data.password, config.bcrypt.saltRounds);
+      // Generate JWT token
+      const token = jwt.sign(
+        { 
+          userId: user.id, 
+          email: user.email, 
+          role: user.role 
+        },
+        config.jwtSecret,
+        { expiresIn: config.jwtExpiresIn }
+      );
 
-// Create user
-const user = this.userRepository.create({
-    email: data.email,
-    password: hashedPassword,
-    firstName: data.firstName || '',
-    lastName: data.lastName || '',
-    role: UserRole.USER
-});
-
-await this.userRepository.save(user);
-
-// Generate tokens
-const accessToken = this.generateAccessToken(user);
-const refreshToken = await this.generateRefreshToken(user);
-
-return {
-    user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role
-    },
-    accessToken,
-    refreshToken
-};
+      return {
+        success: true,
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role
+        }
+      };
+    } catch (error) {
+      console.error('Login error:', error);
+      return { success: false, error: 'Internal server error' };
+    }
   }
 
-  async login(email: string, password: string): Promise {
-    // Find user
-    const user = await this.userRepository.findOne({
-        where: { email }
-    });
+  static async register(email: string, password: string, role: string = 'user'): Promise<RegisterResult> {
+    try {
+      // Check if user already exists
+      const existingUser = await User.findOne({ where: { email } });
+      if (existingUser) {
+        return { success: false, error: 'User already exists' };
+      }
 
-    if (!user || !user.isActive) {
-        return null;
-    }
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+      // Create user
+      const user = await User.create({
+        email,
+        password: hashedPassword,
+        role
+      });
 
-    if (!isPasswordValid) {
-        return null;
-    }
+      // Generate JWT token
+      const token = jwt.sign(
+        { 
+          userId: user.id, 
+          email: user.email, 
+          role: user.role 
+        },
+        config.jwtSecret,
+        { expiresIn: config.jwtExpiresIn }
+      );
 
-    // Update last login
-    user.lastLoginAt = new Date();
-    await this.userRepository.save(user);
-
-    // Generate tokens
-    const accessToken = this.generateAccessToken(user);
-    const refreshToken = await this.generateRefreshToken(user);
-
-    return {
+      return {
+        success: true,
         user: {
-            id: user.id,
-            email: user.email,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            role: user.role
+          id: user.id,
+          email: user.email,
+          role: user.role
         },
-        accessToken,
-        refreshToken
-    };
-}
-
-  async refreshToken(token: string): Promise & lt; { accessToken: string; refreshToken: string } | null & gt; {
-    try {
-        // Find refresh token
-        const refreshTokenRecord = await this.refreshTokenRepository.findOne({
-            where: { token, revoked: false },
-            relations: ['user']
-        });
-
-        if (!refreshTokenRecord) {
-            return null;
-        }
-
-        // Check if expired
-        if (new Date() & gt; refreshTokenRecord.expiresAt) {
-            return null;
-        }
-
-        // Revoke old token
-        refreshTokenRecord.revoked = true;
-        await this.refreshTokenRepository.save(refreshTokenRecord);
-
-        // Generate new tokens
-        const user = refreshTokenRecord.user;
-        const accessToken = this.generateAccessToken(user);
-        const newRefreshToken = await this.generateRefreshToken(user);
-
-        return {
-            accessToken,
-            refreshToken: newRefreshToken
-        };
+        token
+      };
     } catch (error) {
-        logger.error('Refresh token error:', error);
-        return null;
+      console.error('Registration error:', error);
+      return { success: false, error: 'Internal server error' };
     }
-}
+  }
 
-  async logout(token: string): Promise {
-    const refreshTokenRecord = await this.refreshTokenRepository.findOne({
-        where: { token }
-    });
-
-    if (refreshTokenRecord) {
-        refreshTokenRecord.revoked = true;
-        await this.refreshTokenRepository.save(refreshTokenRecord);
-    }
-}
-
-  async validateToken(token: string): Promise {
+  static async validateToken(token: string): Promise<{ valid: boolean; userId?: string; email?: string; role?: string } | null> {
     try {
-        jwt.verify(token, config.jwt.secret);
-        return true;
+      const decoded = jwt.verify(token, config.jwtSecret) as any;
+      return {
+        valid: true,
+        userId: decoded.userId,
+        email: decoded.email,
+        role: decoded.role
+      };
     } catch (error) {
-        return false;
+      return { valid: false };
     }
+  }
 }
-
-  async getUserById(id: string): Promise {
-    return this.userRepository.findOne({ where: { id } });
-}
-
-  private generateAccessToken(user: User): string {
-    return jwt.sign(
-        {
-            userId: user.id,
-            email: user.email,
-            role: user.role
-        },
-        config.jwt.secret,
-        { expiresIn: config.jwt.expiresIn }
-    );
-}
-
-  private async generateRefreshToken(user: User): Promise {
-    const token = jwt.sign(
-        { userId: user.id },
-        config.jwt.refreshSecret,
-        { expiresIn: config.jwt.refreshExpiresIn }
-    );
-
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days
-
-    const refreshToken = this.refreshTokenRepository.create({
-        token,
-        userId: user.id,
-        expiresAt
-    });
-
-    await this.refreshTokenRepository.save(refreshToken);
-
-    return token;
-}
-}
-
-export const authService = new AuthService();

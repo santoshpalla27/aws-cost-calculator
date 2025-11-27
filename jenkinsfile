@@ -1,29 +1,13 @@
 pipeline {
     agent any
-
     stages {
         stage('Checkout Code') {
             steps {
                 script {
-                    git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/santoshpalla27/aws-cost-calculator.git'
+                    git branch: 'main', url: 'https://github.com/santoshpalla27/aws-cost-calculator.git'
                 }
             }
         }
-
-        stage('Prepare ENV') {
-            steps {
-                script {
-                    withCredentials([file(credentialsId: 'app-env-file', variable: 'ENVFILE')]) {
-                        sh """
-                            echo '📌 Preparing environment variables...'
-                            cp $ENVFILE .env
-                            echo '.env copied successfully'
-                        """
-                    }
-                }
-            }
-        }
-
         stage('down') {
             steps {
                 script {

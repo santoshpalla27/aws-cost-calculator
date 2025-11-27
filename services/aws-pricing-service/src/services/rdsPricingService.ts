@@ -1,148 +1,143 @@
-import { PricingClient, GetProductsCommand } from '@aws-sdk/client-pricing';
-import { AWSConfig } from '../config/aws';
-import { RedisCache } from '../cache/redisCache';
+import { pricing } from '../config/aws';
 import { logger } from '../utils/logger';
+import { PriceCalculator } from '../utils/priceCalculator';
 
-export interface RDSCalculationRequest {
-    engine: string;
-    instanceClass: string;
-    region: string;
-    storageType: string;
-    storageSize: number;
-    multiAZ: boolean;
-    backupStorage: number;
-    awsAccessKey: string;
-    awsSecretKey: string;
+export interface RDSCostRequest {
+  engine: string;
+  instanceClass: string;
+  region: string;
+  storageType: string;
+  storageSize: number;
+  multiAZ: boolean;
+  backupStorage: number;
 }
 
-export interface RDSCalculationResult {
-    instanceCost: {
-        hourly: number;
-        monthly: number;
-    };
-    storageCost: {
-        monthly: number;
-    };
-    backupCost: {
-        monthly: number;
-    };
-    totalMonthlyCost: number;
-    totalHourlyCost: number;
-    breakdown: any;
+export interface RDSCostResult {
+  monthlyCost: number;
+  hourlyCost: number;
+  breakdown: {
+    instanceCost: number;
+    storageCost: number;
+    ioCost: number;
+    backupCost: number;
+  };
 }
 
 export class RDSPricingService {
-    private cache: RedisCache;
+  private priceCalculator: PriceCalculator;
 
-    constructor() {
-        this.cache = new RedisCache();
-    }
+  constructor() {
+    this.priceCalculator = new PriceCalculator();
+  }
 
-    async calculateRDSCost(request: RDSCalculationRequest): Promise {
-        try {
-            logger.info('Calculating RDS costs', {
-                instanceClass: request.instanceClass,
-                engine: request.engine
-            });
+  async calculateRDSCost(
+    engine: string,
+    instanceClass: string,
+    region: string,
+    storageType: string,
+    storageSize: number = 100,
+    multiAZ: boolean = false,
+    backupStorage: number = 0
+  ): Promise<RDSCostResult> {
+    try {
+      // Calculate instance cost
+      const hourlyInstanceCost = await this.getInstanceCost(engine, instanceClass, region, multiAZ);
+      const monthlyInstanceCost = hourlyInstanceCost * 730; // 730 hours in a month
 
-            const cacheKey = this.generateCacheKey(request);
-            const cached = await this.cache.get(cacheKey);
-            if (cached) {
-                return JSON.parse(cached);
-            }
+      // Calculate storage cost
+      const monthlyStorageCost = await this.getStorageCost(storageType, storageSize, region);
 
-            // Get instance pricing
-            const instancePrice = await this.getInstancePrice(
-                request.engine,
-                request.instanceClass,
-                request.region,
-                request.multiAZ,
-                request.awsAccessKey,
-                request.awsSecretKey
-            );
+      // Calculate I/O cost (simplified)
+      const monthlyIOCost = 0; // Would be calculated based on actual I/O in a real implementation
 
-            // Calculate storage cost
-            const storagePricing: { [key: string]: number } = {
-                'gp2': 0.115,
-                'gp3': 0.10,
-                'io1': 0.125,
-                'magnetic': 0.10
-            };
+      // Calculate backup cost
+      const monthlyBackupCost = await this.getBackupCost(backupStorage, region);
 
-            const storagePrice = storagePricing[request.storageType] || 0.115;
-            const storageCost = request.storageSize * storagePrice;
+      // Calculate total cost
+      const totalMonthlyCost = monthlyInstanceCost + monthlyStorageCost + monthlyIOCost + monthlyBackupCost;
+      const totalHourlyCost = hourlyInstanceCost;
 
-            // Backup storage cost (\$0.095 per GB-month)
-            const backupCost = request.backupStorage * 0.095;
-
-            const instanceHourlyCost = instancePrice;
-            const instanceMonthlyCost = instanceHourlyCost * 730; // 730 hours per month
-            const totalMonthlyCost = instanceMonthlyCost + storageCost + backupCost;
-            const totalHourlyCost = totalMonthlyCost / 730;
-
-            const result: RDSCalculationResult = {
-                instanceCost: {
-                    hourly: parseFloat(instanceHourlyCost.toFixed(4)),
-                    monthly: parseFloat(instanceMonthlyCost.toFixed(2))
-                },
-                storageCost: {
-                    monthly: parseFloat(storageCost.toFixed(2))
-                },
-                backupCost: {
-                    monthly: parseFloat(backupCost.toFixed(2))
-                },
-                totalMonthlyCost: parseFloat(totalMonthlyCost.toFixed(2)),
-                totalHourlyCost: parseFloat(totalHourlyCost.toFixed(4)),
-                breakdown: {
-                    engine: request.engine,
-                    instanceClass: request.instanceClass,
-                    region: request.region,
-                    multiAZ: request.multiAZ,
-                    storageType: request.storageType,
-                    storageSize: request.storageSize
-                }
-            };
-
-            await this.cache.set(cacheKey, JSON.stringify(result), 3600);
-
-            return result;
-
-        } catch (error) {
-            logger.error('Error calculating RDS costs:', error);
-            throw error;
+      return {
+        monthlyCost: parseFloat(totalMonthlyCost.toFixed(2)),
+        hourlyCost: parseFloat(totalHourlyCost.toFixed(2)),
+        breakdown: {
+          instanceCost: parseFloat(monthlyInstanceCost.toFixed(2)),
+          storageCost: parseFloat(monthlyStorageCost.toFixed(2)),
+          ioCost: parseFloat(monthlyIOCost.toFixed(2)),
+          backupCost: parseFloat(monthlyBackupCost.toFixed(2))
         }
+      };
+    } catch (error) {
+      logger.error('Error calculating RDS cost:', error);
+      throw error;
     }
+  }
 
-    private async getInstancePrice(
-        engine: string,
-        instanceClass: string,
-        region: string,
-        multiAZ: boolean,
-        accessKeyId: string,
-        secretAccessKey: string
-    ): Promise {
-        // Default pricing fallback
-        const defaultPrices: { [key: string]: number } = {
-            'db.t3.micro': 0.017,
-            'db.t3.small': 0.034,
-            'db.t3.medium': 0.068,
-            'db.t3.large': 0.136,
-            'db.m5.large': 0.192,
-            'db.m5.xlarge': 0.384,
-            'db.r5.large': 0.29
-        };
+  private async getInstanceCost(
+    engine: string,
+    instanceClass: string,
+    region: string,
+    multiAZ: boolean
+  ): Promise<number> {
+    // This is a simplified implementation
+    // In a real system, this would query the AWS Pricing API
+    const priceMap: { [key: string]: number } = {
+      // Sample pricing data (these are illustrative, not real prices)
+      'db.t3.micro': 0.017,
+      'db.t3.small': 0.034,
+      'db.t3.medium': 0.068,
+      'db.t3.large': 0.136,
+      'db.m5.large': 0.126,
+      'db.m5.xlarge': 0.252,
+      'db.m5.2xlarge': 0.504,
+      'db.r5.large': 0.179,
+      'db.r5.xlarge': 0.358,
+      'db.r5.2xlarge': 0.716,
+    };
 
-        let basePrice = defaultPrices[instanceClass] || 0.10;
+    // Determine the base price based on instance class
+    const basePrice = priceMap[instanceClass] || 0.15; // Default to $0.15/hr if not found
+    
+    // Adjust price based on engine
+    const engineMultiplier = engine.includes('postgres') || engine.includes('mysql') ? 1.0 : 
+                            engine.includes('oracle') ? 1.5 : 1.2;
+    
+    // Adjust based on region
+    const regionMultiplier = region.startsWith('us-') ? 1.0 : 1.1;
+    
+    // Multi-AZ doubles the cost
+    const multiAZMultiplier = multiAZ ? 2.0 : 1.0;
+    
+    return basePrice * engineMultiplier * regionMultiplier * multiAZMultiplier;
+  }
 
-        // Multi-AZ doubles the cost
-        if (multiAZ) {
-            basePrice *= 2;
-        }
+  private async getStorageCost(
+    storageType: string,
+    storageSize: number,
+    region: string
+  ): Promise<number> {
+    // Storage pricing per GB-month
+    const storagePricePerGBMonth = {
+      'gp2': 0.10, // General purpose SSD
+      'gp3': 0.08, // General purpose SSD (newer)
+      'io1': 0.125, // Provisioned IOPS SSD
+      'io2': 0.115, // Provisioned IOPS SSD (newer)
+      'standard': 0.05, // Magnetic
+      'aurora': 0.115 // Aurora storage
+    };
 
-        return basePrice;
-    }
+    const pricePerGB = storagePricePerGBMonth[storageType] || 0.10;
+    
+    return storageSize * pricePerGB;
+  }
 
-    private generateCacheKey(request: RDSCalculationRequest): string {
-        return `rds:\${request.engine}:\${request.instanceClass}:\${request.region}:\${request.multiAZ}`;
-    }
+  private async getBackupCost(
+    backupStorage: number,
+    region: string
+  ): Promise<number> {
+    // Backup storage pricing per GB-month
+    const backupPricePerGBMonth = 0.095; // Simplified backup price
+    
+    return backupStorage * backupPricePerGBMonth;
+  }
 }

@@ -1,216 +1,121 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: postgres:15-alpine
-    container_name: infracost-postgres
-    environment:
-      POSTGRES_DB: infracost_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+  nginx:
+    build: ./nginx
     ports:
-      - "5432:5432"
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend
+      - api-gateway
+    networks:
+      - infracost-network
+
+  frontend:
+    build: ./frontend
+    expose:
+      - 3001
+    environment:
+      - NODE_ENV=production
+    networks:
+      - infracost-network
+
+  api-gateway:
+    build: ./services/api-gateway
+    expose:
+      - 3000
+    environment:
+      - NODE_ENV=production
+      - AUTH_SERVICE_URL=http://auth-service:3002
+      - TERRAFORM_COST_SERVICE_URL=http://terraform-cost-engine:8000
+      - AWS_PRICING_SERVICE_URL=http://aws-pricing-service:3003
+      - REPORTS_SERVICE_URL=http://reports-service:3004
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    networks:
+      - infracost-network
+
+  auth-service:
+    build: ./services/auth-service
+    expose:
+      - 3002
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/infracost_analyzer
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      - postgres
+    networks:
+      - infracost-network
+
+  terraform-cost-engine:
+    build: ./services/terraform-cost-engine
+    expose:
+      - 8000
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/infracost_analyzer
+    depends_on:
+      - postgres
+    networks:
+      - infracost-network
+
+  aws-pricing-service:
+    build: ./services/aws-pricing-service
+    expose:
+      - 3003
+    environment:
+      - NODE_ENV=production
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+    depends_on:
+      - redis
+    networks:
+      - infracost-network
+
+  reports-service:
+    build: ./services/reports-service
+    expose:
+      - 3004
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/infracost_analyzer
+    depends_on:
+      - postgres
+    networks:
+      - infracost-network
+
+  postgres:
+    image: postgres:15
+    expose:
+      - 5432
+    environment:
+      - POSTGRES_DB=infracost_analyzer
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - infracost-network
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: infracost-redis
-    ports:
-      - "6379:6379"
+    expose:
+      - 6379
     volumes:
       - redis_data:/data
     networks:
       - infracost-network
-    healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # API Gateway Service
-  api-gateway:
-    build:
-      context: ./services/api-gateway
-      dockerfile: Dockerfile
-    container_name: infracost-api-gateway
-    ports:
-      - "3000:3000"
-    environment:
-      NODE_ENV: development
-      PORT: 3000
-      JWT_SECRET: \${JWT_SECRET:-dev-secret-key-change-in-production}
-      AUTH_SERVICE_URL: http://auth-service:3002
-      TERRAFORM_COST_SERVICE_URL: http://terraform-cost-engine:8000
-      AWS_PRICING_SERVICE_URL: http://aws-pricing-service:3003
-      REPORTS_SERVICE_URL: http://reports-service:3004
-      CORS_ORIGINS: http://localhost:3001,http://frontend:3001
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - infracost-network
-    volumes:
-      - ./services/api-gateway/src:/app/src
-      - ./services/api-gateway/logs:/app/logs
-
-  # Auth Service
-  auth-service:
-    build:
-      context: ./services/auth-service
-      dockerfile: Dockerfile
-    container_name: infracost-auth-service
-    ports:
-      - "3002:3002"
-    environment:
-      NODE_ENV: development
-      PORT: 3002
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: infracost_db
-      JWT_SECRET: \${JWT_SECRET:-dev-secret-key-change-in-production}
-      JWT_EXPIRES_IN: 24h
-      JWT_REFRESH_SECRET: \${JWT_REFRESH_SECRET:-dev-refresh-secret}
-      JWT_REFRESH_EXPIRES_IN: 7d
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - infracost-network
-    volumes:
-      - ./services/auth-service/src:/app/src
-
-  # Terraform Cost Engine Service
-  terraform-cost-engine:
-    build:
-      context: ./services/terraform-cost-engine
-      dockerfile: Dockerfile
-    container_name: infracost-terraform-engine
-    ports:
-      - "8000:8000"
-    environment:
-      DEBUG: "True"
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/infracost_db
-      REDIS_URL: redis://redis:6379/0
-      INFRACOST_API_KEY: \${INFRACOST_API_KEY}
-      AWS_ACCESS_KEY_ID: \${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: \${AWS_SECRET_ACCESS_KEY}
-      AWS_DEFAULT_REGION: \${AWS_DEFAULT_REGION:-us-east-1}
-      WORK_DIR: /tmp/terraform-work
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - infracost-network
-    volumes:
-      - ./services/terraform-cost-engine/app:/app/app
-      - terraform_work:/tmp/terraform-work
-    privileged: true
-
-  # AWS Pricing Service
-  aws-pricing-service:
-    build:
-      context: ./services/aws-pricing-service
-      dockerfile: Dockerfile
-    container_name: infracost-aws-pricing
-    ports:
-      - "3003:3003"
-    environment:
-      NODE_ENV: development
-      PORT: 3003
-      REDIS_URL: redis://redis:6379/0
-      AWS_DEFAULT_REGION: \${AWS_DEFAULT_REGION:-us-east-1}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - infracost-network
-    volumes:
-      - ./services/aws-pricing-service/src:/app/src
-
-  # Reports Service
-  reports-service:
-    build:
-      context: ./services/reports-service
-      dockerfile: Dockerfile
-    container_name: infracost-reports-service
-    ports:
-      - "3004:3004"
-    environment:
-      NODE_ENV: development
-      PORT: 3004
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: infracost_db
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - infracost-network
-    volumes:
-      - ./services/reports-service/src:/app/src
-      - reports_exports:/tmp/reports
-
-  # Frontend Service
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: infracost-frontend
-    ports:
-      - "3001:3001"
-    environment:
-      NODE_ENV: development
-      NEXT_PUBLIC_API_URL: http://localhost:3000
-    depends_on:
-      - api-gateway
-    networks:
-      - infracost-network
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-
-  # Nginx Reverse Proxy
-  nginx:
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile
-    container_name: infracost-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    depends_on:
-      - api-gateway
-      - frontend
-    networks:
-      - infracost-network
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-
-networks:
-  infracost-network:
-    driver: bridge
 
 volumes:
   postgres_data:
   redis_data:
-  terraform_work:
-  reports_exports:
+
+networks:
+  infracost-network:
+    driver: bridge

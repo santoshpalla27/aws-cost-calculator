@@ -1,145 +1,184 @@
-import { Request, Response, NextFunction } from 'express';
-import { reportService } from '../services/reportService';
-import { pdfGenerator } from '../services/pdfGenerator';
-import { csvExporter } from '../services/csvExporter';
+import { Router, Request, Response } from 'express';
+import { ReportService } from '../services/reportService';
 import { logger } from '../utils/logger';
-import * as fs from 'fs';
+import Joi from 'joi';
 
-export class ReportController {
-    async createReport(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const { type, name, data, totalMonthlyCost, metadata } = req.body;
+export const reportRoutes = Router();
+const reportService = new ReportService();
 
-            const report = await reportService.createReport(
-                userId,
-                type,
-                name,
-                data,
-                totalMonthlyCost,
-                metadata
-            );
+/**
+ * @swagger
+ * /reports:
+ *   get:
+ *     summary: Get cost reports
+ *     tags: [Reports]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *     responses:
+ *       200:
+ *         description: List of cost reports
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 reports:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *                       totalCost:
+ *                         type: number
+ */
+reportRoutes.get('/', async (req: Request, res: Response) => {
+  try {
+    const schema = Joi.object({
+      limit: Joi.number().integer().min(1).max(100).default(10),
+      offset: Joi.number().integer().min(0).default(0)
+    });
 
-            res.status(201).json(report);
-        } catch (error) {
-            logger.error('Create report error:', error);
-            next(error);
-        }
+    const { error } = schema.validate(req.query);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
     }
 
-    async getReports(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const filters = req.query;
+    const { limit, offset } = schema.validate(req.query).value;
+    
+    const reports = await reportService.getReports(limit, offset);
+    
+    res.json({ reports });
+  } catch (error) {
+    logger.error('Error fetching reports:', error);
+    res.status(500).json({ error: 'Failed to fetch reports' });
+  }
+});
 
-            const reports = await reportService.getReports(userId, filters);
+/**
+ * @swagger
+ * /reports/{id}:
+ *   get:
+ *     summary: Get a specific cost report
+ *     tags: [Reports]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Cost report details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                 name:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ */
+reportRoutes.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const schema = Joi.object({
+      id: Joi.string().required()
+    });
 
-            res.json(reports);
-        } catch (error) {
-            logger.error('Get reports error:', error);
-            next(error);
-        }
+    const { error } = schema.validate(req.params);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
     }
 
-    async getReport(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const { id } = req.params;
+    const report = await reportService.getReportById(req.params.id);
+    
+    if (!report) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+    
+    res.json(report);
+  } catch (error) {
+    logger.error('Error fetching report:', error);
+    res.status(500).json({ error: 'Failed to fetch report' });
+  }
+});
 
-            const report = await reportService.getReportById(id, userId);
+/**
+ * @swagger
+ * /reports/export/{id}:
+ *   get:
+ *     summary: Export a cost report
+ *     tags: [Reports]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: format
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [pdf, csv]
+ *     responses:
+ *       200:
+ *         description: Exported report file
+ */
+reportRoutes.get('/export/:id', async (req: Request, res: Response) => {
+  try {
+    const schema = Joi.object({
+      id: Joi.string().required(),
+      format: Joi.string().valid('pdf', 'csv').required()
+    });
 
-            if (!report) {
-                return res.status(404).json({ error: 'Report not found' });
-            }
-
-            res.json(report);
-        } catch (error) {
-            logger.error('Get report error:', error);
-            next(error);
-        }
+    const { error } = schema.validate(req.query);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
     }
 
-    async deleteReport(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const { id } = req.params;
-
-            const deleted = await reportService.deleteReport(id, userId);
-
-            if (!deleted) {
-                return res.status(404).json({ error: 'Report not found' });
-            }
-
-            res.json({ message: 'Report deleted successfully' });
-        } catch (error) {
-            logger.error('Delete report error:', error);
-            next(error);
-        }
+    const { id } = req.params;
+    const { format } = req.query as { format: 'pdf' | 'csv' };
+    
+    if (format === 'pdf') {
+      const pdfBuffer = await reportService.exportReportAsPDF(id);
+      
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=report_${id}.pdf`);
+      res.send(pdfBuffer);
+    } else if (format === 'csv') {
+      const csvData = await reportService.exportReportAsCSV(id);
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename=report_${id}.csv`);
+      res.send(csvData);
+    } else {
+      res.status(400).json({ error: 'Invalid format' });
     }
+  } catch (error) {
+    logger.error('Error exporting report:', error);
+    res.status(500).json({ error: 'Failed to export report' });
+  }
+});
 
-    async exportPDF(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const { id } = req.params;
-
-            const report = await reportService.getReportById(id, userId);
-
-            if (!report) {
-                return res.status(404).json({ error: 'Report not found' });
-            }
-
-            const doc = pdfGenerator.generateReportPDF(report);
-
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename=report-\${id}.pdf`);
-
-            doc.pipe(res);
-            doc.end();
-        } catch (error) {
-            logger.error('Export PDF error:', error);
-            next(error);
-        }
-    }
-
-    async exportCSV(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const { id } = req.params;
-
-            const report = await reportService.getReportById(id, userId);
-
-            if (!report) {
-                return res.status(404).json({ error: 'Report not found' });
-            }
-
-            const filePath = await csvExporter.exportReportToCSV(report);
-
-            res.download(filePath, `report-\${id}.csv`, (err) =& gt; {
-                if (err) {
-                    logger.error('Download error:', err);
-                }
-                // Cleanup
-                fs.unlinkSync(filePath);
-            });
-        } catch (error) {
-            logger.error('Export CSV error:', error);
-            next(error);
-        }
-    }
-
-    async getCostTrends(req: Request, res: Response, next: NextFunction) {
-        try {
-            const userId = (req as any).user?.id;
-            const days = parseInt(req.query.days as string) || 30;
-
-            const trends = await reportService.getCostTrends(userId, days);
-
-            res.json(trends);
-        } catch (error) {
-            logger.error('Get cost trends error:', error);
-            next(error);
-        }
-    }
-}
-
-export const reportController = new ReportController();
+export default reportRoutes;

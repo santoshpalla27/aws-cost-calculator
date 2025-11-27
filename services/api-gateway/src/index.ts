@@ -16,8 +16,8 @@ const app: Application = express();
 // Security middleware
 app.use(helmet());
 app.use(cors({
-    origin: config.corsOrigins,
-    credentials: true
+  origin: config.corsOrigins,
+  credentials: true
 }));
 
 // Compression
@@ -28,7 +28,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Logging
-app.use(morgan('combined', { stream: { write: message =& gt; logger.info(message.trim()) } }));
+app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 
 // Rate limiting
 app.use(rateLimiter);
@@ -37,13 +37,13 @@ app.use(rateLimiter);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Health check
-app.get('/health', (req, res) =& gt; {
-    res.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        service: 'api-gateway',
-        version: '1.0.0'
-    });
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    service: 'api-gateway',
+    version: '1.0.0'
+  });
 });
 
 // Routes
@@ -54,9 +54,9 @@ app.use(errorHandler);
 
 const PORT = config.port || 3000;
 
-app.listen(PORT, () =& gt; {
-    logger.info(`API Gateway running on port \${PORT}`);
-    logger.info(`API Documentation available at http://localhost:\${PORT}/api-docs`);
+app.listen(PORT, () => {
+  logger.info(`API Gateway running on port ${PORT}`);
+  logger.info(`API Documentation available at http://localhost:${PORT}/api-docs`);
 });
 
 export default app;

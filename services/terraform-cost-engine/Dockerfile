@@ -1,30 +1,25 @@
 FROM python:3.11-slim
 
+WORKDIR /app
+
 # Install system dependencies
-RUN apt-get update &amp;&amp; apt-get install -y \
-    git \
+RUN apt-get update && apt-get install -y \
     curl \
+    git \
     unzip \
-    gnupg \
-    software-properties-common \
-    &amp;&amp; rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Terraform
 RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | apt-key add - \
-    &amp;&amp; apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com \$(lsb_release -cs) main" \
-    &amp;&amp; apt-get update \
-    &amp;&amp; apt-get install -y terraform
+    && echo "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list \
+    && apt-get update && apt-get install -y terraform
 
 # Install Infracost
-RUN curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+RUN curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | bash
 
-WORKDIR /app
-
-# Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY . .
 
 EXPOSE 8000

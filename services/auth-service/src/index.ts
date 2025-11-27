@@ -1,51 +1,70 @@
-import 'reflect-metadata';
-import express, { Application } from 'express';
+import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { config } from './config';
-import { AppDataSource } from './config/database';
+import rateLimit from 'express-rate-limit';
+import morgan from 'morgan';
+import { config } from './config/database';
 import { logger } from './utils/logger';
-import { errorHandler } from './middleware/errorHandler';
-import authRoutes from './routes/authRoutes';
-import userRoutes from './routes/userRoutes';
+import { authRoutes } from './routes/authRoutes';
 
 const app: Application = express();
 
-// Middleware
+// Security middleware
 app.use(helmet());
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3001'],
+  credentials: true
+}));
 
-// Health check
-app.get('/health', (req, res) =& gt; {
-    res.json({
-        status: 'healthy',
-        service: 'auth-service',
-        version: '1.0.0'
-    });
-});
+// Rate limiting
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+}));
+
+// Body parsing
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Logging
+app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 
 // Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
+app.use('/auth', authRoutes);
 
-// Error handling
-app.use(errorHandler);
+// Health check
+app.get('/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    service: 'auth-service',
+    version: '1.0.0'
+  });
+});
 
-// Initialize database and start server
-const PORT = config.port || 3002;
+// Validate token endpoint
+app.post('/validate', (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ valid: false });
+    }
 
-AppDataSource.initialize()
-    .then(() =& gt; {
-    logger.info('Database connected successfully');
+    const token = authHeader.substring(7);
+    const decoded = require('jsonwebtoken').verify(token, config.jwtSecret);
 
-    app.listen(PORT, () =& gt; {
-        logger.info(`Auth Service running on port \${PORT}`);
-    });
-})
-  .catch ((error) =& gt; {
-    logger.error('Error during Data Source initialization:', error);
-    process.exit(1);
+    // In a real application, you'd check if the user exists in the database
+    res.json({ valid: true, user: { id: decoded.userId, email: decoded.email } });
+  } catch (error) {
+    res.status(401).json({ valid: false });
+  }
+});
+
+const PORT = process.env.PORT || 3002;
+
+app.listen(PORT, () => {
+  logger.info(`Auth service running on port ${PORT}`);
 });
 
 export default app;

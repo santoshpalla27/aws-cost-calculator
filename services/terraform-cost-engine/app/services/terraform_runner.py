@@ -1,115 +1,99 @@
-import asyncio
+import subprocess
 import os
-import json
+from typing import Optional
 import tempfile
-import shutil
-from typing import Dict, Optional
 import logging
-
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 class TerraformRunner:
-    """Service to run Terraform commands"""
-    
     def __init__(self):
-        self.work_dir = settings.WORK_DIR
-        os.makedirs(self.work_dir, exist_ok=True)
-    
-    async def save_files(self, files: Dict[str, str]) -&gt; str:
-        """Save uploaded Terraform files to a working directory"""
-        work_dir = tempfile.mkdtemp(dir=self.work_dir)
-        
-        for filename, content in files.items():
-            file_path = os.path.join(work_dir, filename)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            
-            with open(file_path, 'w') as f:
-                f.write(content)
-        
-        logger.info(f"Saved {len(files)} files to {work_dir}")
-        return work_dir
-    
-    async def init(self, work_dir: str) -&gt; None:
-        """Run terraform init"""
-        logger.info(f"Running terraform init in {work_dir}")
-        
-        process = await asyncio.create_subprocess_exec(
-            'terraform', 'init', '-no-color',
-            cwd=work_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=settings.TERRAFORM_TIMEOUT
-        )
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode()
-            logger.error(f"Terraform init failed: {error_msg}")
-            raise Exception(f"Terraform init failed: {error_msg}")
-        
-        logger.info("Terraform init completed successfully")
-    
-    async def plan(self, work_dir: str) -&gt; str:
-        """Run terraform plan and return plan file path"""
-        logger.info(f"Running terraform plan in {work_dir}")
-        
-        plan_file = os.path.join(work_dir, "tfplan")
-        
-        process = await asyncio.create_subprocess_exec(
-            'terraform', 'plan', '-out', plan_file, '-no-color',
-            cwd=work_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=settings.TERRAFORM_TIMEOUT
-        )
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode()
-            logger.error(f"Terraform plan failed: {error_msg}")
-            raise Exception(f"Terraform plan failed: {error_msg}")
-        
-        logger.info("Terraform plan completed successfully")
-        return plan_file
-    
-    async def show_json(self, work_dir: str, plan_file: str) -&gt; Dict:
-        """Convert Terraform plan to JSON"""
-        logger.info(f"Converting plan to JSON: {plan_file}")
-        
-        process = await asyncio.create_subprocess_exec(
-            'terraform', 'show', '-json', plan_file,
-            cwd=work_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=settings.TERRAFORM_TIMEOUT
-        )
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode()
-            logger.error(f"Terraform show failed: {error_msg}")
-            raise Exception(f"Terraform show failed: {error_msg}")
-        
-        plan_json = json.loads(stdout.decode())
-        logger.info("Successfully converted plan to JSON")
-        return plan_json
-    
-    async def cleanup(self, work_dir: str) -&gt; None:
-        """Clean up working directory"""
+        pass
+
+    def run_init(self, working_dir: str) -> bool:
+        """
+        Run terraform init in the specified directory
+        """
         try:
-            if os.path.exists(work_dir):
-                shutil.rmtree(work_dir)
-                logger.info(f"Cleaned up working directory: {work_dir}")
+            result = subprocess.run(
+                ["terraform", "init"],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Terraform init failed: {result.stderr}")
+                return False
+            
+            logger.info("Terraform init completed successfully")
+            return True
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Terraform init timed out")
+            return False
         except Exception as e:
-            logger.error(f"Error cleaning up {work_dir}: {str(e)}")
+            logger.error(f"Error running terraform init: {str(e)}")
+            return False
+
+    def run_plan(self, working_dir: str, out_file: Optional[str] = None) -> str:
+        """
+        Run terraform plan in the specified directory
+        """
+        try:
+            if out_file:
+                cmd = ["terraform", "plan", "-out", out_file]
+            else:
+                # Create a temporary plan file
+                out_file = os.path.join(working_dir, "plan.out")
+                cmd = ["terraform", "plan", "-out", out_file]
+            
+            result = subprocess.run(
+                cmd,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minute timeout
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Terraform plan failed: {result.stderr}")
+                raise Exception(f"Terraform plan failed: {result.stderr}")
+            
+            logger.info("Terraform plan completed successfully")
+            return out_file
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Terraform plan timed out")
+            raise Exception("Terraform plan timed out")
+        except Exception as e:
+            logger.error(f"Error running terraform plan: {str(e)}")
+            raise
+
+    def run_show(self, working_dir: str, plan_file: str) -> str:
+        """
+        Run terraform show to get JSON output of the plan
+        """
+        try:
+            result = subprocess.run(
+                ["terraform", "show", "-json", plan_file],
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"Terraform show failed: {result.stderr}")
+                raise Exception(f"Terraform show failed: {result.stderr}")
+            
+            logger.info("Terraform show completed successfully")
+            return result.stdout
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Terraform show timed out")
+            raise Exception("Terraform show timed out")
+        except Exception as e:
+            logger.error(f"Error running terraform show: {str(e)}")
+            raise

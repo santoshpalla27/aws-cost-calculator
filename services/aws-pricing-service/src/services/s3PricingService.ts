@@ -1,118 +1,146 @@
-import { RedisCache } from '../cache/redisCache';
+import { pricing } from '../config/aws';
 import { logger } from '../utils/logger';
+import { PriceCalculator } from '../utils/priceCalculator';
 
-export interface S3CalculationRequest {
-    region: string;
-    storageClass: string;
-    storageAmount: number; // in GB
-    putRequests: number;
-    getRequests: number;
-    dataTransferOut: number; // in GB
-    awsAccessKey: string;
-    awsSecretKey: string;
+export interface S3CostRequest {
+  storageClass: string;
+  storageSize: number;
+  monthlyRequests: number;
+  monthlyDataTransfer: number;
+  region: string;
 }
 
-export interface S3CalculationResult {
-    storageCost: {
-        monthly: number;
-        pricePerGB: number;
-    };
-    requestCost: {
-        monthly: number;
-        putCost: number;
-        getCost: number;
-    };
-    dataTransferCost: {
-        monthly: number;
-    };
-    totalMonthlyCost: number;
-    breakdown: any;
+export interface S3CostResult {
+  monthlyCost: number;
+  breakdown: {
+    storageCost: number;
+    requestCost: number;
+    dataTransferCost: number;
+  };
 }
 
 export class S3PricingService {
-    private cache: RedisCache;
+  private priceCalculator: PriceCalculator;
 
-    constructor() {
-        this.cache = new RedisCache();
-    }
+  constructor() {
+    this.priceCalculator = new PriceCalculator();
+  }
 
-    async calculateS3Cost(request: S3CalculationRequest): Promise {
-        try {
-            logger.info('Calculating S3 costs', {
-                storageClass: request.storageClass,
-                storageAmount: request.storageAmount
-            });
+  async calculateS3Cost(
+    storageClass: string,
+    storageSize: number = 100,
+    monthlyRequests: number = 0,
+    monthlyDataTransfer: number = 0,
+    region: string = 'us-east-1'
+  ): Promise<S3CostResult> {
+    try {
+      // Calculate storage cost
+      const monthlyStorageCost = await this.getStorageCost(storageClass, storageSize, region);
 
-            const cacheKey = this.generateCacheKey(request);
-            const cached = await this.cache.get(cacheKey);
-            if (cached) {
-                return JSON.parse(cached);
-            }
+      // Calculate request cost
+      const monthlyRequestCost = await this.getRequestCost(storageClass, monthlyRequests);
 
-            // Storage pricing per GB-month (us-east-1 pricing)
-            const storagePricing: { [key: string]: number } = {
-                'STANDARD': 0.023,
-                'INTELLIGENT_TIERING': 0.023,
-                'STANDARD_IA': 0.0125,
-                'ONEZONE_IA': 0.01,
-                'GLACIER': 0.004,
-                'GLACIER_IR': 0.004,
-                'DEEP_ARCHIVE': 0.00099
-            };
+      // Calculate data transfer cost
+      const monthlyDataTransferCost = await this.getDataTransferCost(monthlyDataTransfer, region);
 
-            const pricePerGB = storagePricing[request.storageClass] || 0.023;
-            const storageCost = request.storageAmount * pricePerGB;
+      // Calculate total cost
+      const totalMonthlyCost = monthlyStorageCost + monthlyRequestCost + monthlyDataTransferCost;
 
-            // Request pricing
-            // PUT requests: \$0.005 per 1,000 requests
-            // GET requests: \$0.0004 per 1,000 requests
-            const putCost = (request.putRequests / 1000) * 0.005;
-            const getCost = (request.getRequests / 1000) * 0.0004;
-            const requestCost = putCost + getCost;
-
-            // Data transfer pricing (first 1 GB free, then \$0.09/GB up to 10 TB)
-            let dataTransferCost = 0;
-            if (request.dataTransferOut & gt; 1) {
-                dataTransferCost = (request.dataTransferOut - 1) * 0.09;
-            }
-
-            const totalMonthlyCost = storageCost + requestCost + dataTransferCost;
-
-            const result: S3CalculationResult = {
-                storageCost: {
-                    monthly: parseFloat(storageCost.toFixed(2)),
-                    pricePerGB
-                },
-                requestCost: {
-                    monthly: parseFloat(requestCost.toFixed(2)),
-                    putCost: parseFloat(putCost.toFixed(4)),
-                    getCost: parseFloat(getCost.toFixed(4))
-                },
-                dataTransferCost: {
-                    monthly: parseFloat(dataTransferCost.toFixed(2))
-                },
-                totalMonthlyCost: parseFloat(totalMonthlyCost.toFixed(2)),
-                breakdown: {
-                    region: request.region,
-                    storageClass: request.storageClass,
-                    storageAmount: request.storageAmount,
-                    putRequests: request.putRequests,
-                    getRequests: request.getRequests,
-                    dataTransferOut: request.dataTransferOut
-                }
-            };
-
-            await this.cache.set(cacheKey, JSON.stringify(result), 3600);
-
-            return result;
-
-        } catch (error) {
-            logger.error('Error calculating S3 costs:', error);
-            throw error;
+      return {
+        monthlyCost: parseFloat(totalMonthlyCost.toFixed(2)),
+        breakdown: {
+          storageCost: parseFloat(monthlyStorageCost.toFixed(2)),
+          requestCost: parseFloat(monthlyRequestCost.toFixed(2)),
+          dataTransferCost: parseFloat(monthlyDataTransferCost.toFixed(2))
         }
+      };
+    } catch (error) {
+      logger.error('Error calculating S3 cost:', error);
+      throw error;
+    }
+  }
+
+  private async getStorageCost(
+    storageClass: string,
+    storageSize: number,
+    region: string
+  ): Promise<number> {
+    // Storage pricing per GB-month by storage class
+    const storagePricePerGBMonth: { [key: string]: number } = {
+      'STANDARD': 0.023, // S3 Standard
+      'STANDARD_IA': 0.0044, // S3 Standard-IA
+      'ONEZONE_IA': 0.0044, // S3 One Zone-IA
+      'INTELLIGENT_TIERING': 0.0044, // S3 Intelligent-Tiering
+      'GLACIER': 0.004, // S3 Glacier
+      'GLACIER_IR': 0.004, // S3 Glacier Instant Retrieval
+      'DEEP_ARCHIVE': 0.00099 // S3 Glacier Deep Archive
+    };
+
+    const pricePerGB = storagePricePerGBMonth[storageClass.toUpperCase()] || 0.023;
+    
+    return storageSize * pricePerGB;
+  }
+
+  private async getRequestCost(
+    storageClass: string,
+    monthlyRequests: number
+  ): Promise<number> {
+    // Request pricing per 1000 requests by storage class
+    const requestPricePer1000: { [key: string]: number } = {
+      'STANDARD': 0.005, // GET, SELECT, and all other requests
+      'STANDARD_IA': 0.01, // GET, SELECT, and all other requests
+      'ONEZONE_IA': 0.01, // GET, SELECT, and all other requests
+      'INTELLIGENT_TIERING': 0.005, // GET, SELECT, and all other requests
+      'GLACIER': 0.005, // Glacier retrieval requests
+      'GLACIER_IR': 0.01, // Glacier Instant Retrieval retrieval requests
+      'DEEP_ARCHIVE': 0.01 // Glacier Deep Archive retrieval requests
+    };
+
+    const requestsPer1000 = Math.ceil(monthlyRequests / 1000);
+    const pricePer1000Requests = requestPricePer1000[storageClass.toUpperCase()] || 0.005;
+    
+    return requestsPer1000 * pricePer1000Requests;
+  }
+
+  private async getDataTransferCost(
+    monthlyDataTransfer: number,
+    region: string
+  ): Promise<number> {
+    // Simplified data transfer pricing
+    // First 10TB per month: $0.09 per GB
+    // Next 40TB per month: $0.085 per GB
+    // Next 100TB per month: $0.07 per GB
+    // Next 350TB per month: $0.05 per GB
+    
+    let totalCost = 0;
+    let remainingData = monthlyDataTransfer;
+
+    if (remainingData > 0) {
+      // First 10TB (10,240 GB)
+      const firstTier = Math.min(remainingData, 10240);
+      totalCost += firstTier * 0.09;
+      remainingData -= firstTier;
     }
 
-    private generateCacheKey(request: S3CalculationRequest): string {
-        return `s3:\${request.storageClass}:\${request.storageAmount}:\${request.region}`;
+    if (remainingData > 0) {
+      // Next 40TB (40,960 GB)
+      const secondTier = Math.min(remainingData, 40960);
+      totalCost += secondTier * 0.085;
+      remainingData -= secondTier;
     }
+
+    if (remainingData > 0) {
+      // Next 100TB (102,400 GB)
+      const thirdTier = Math.min(remainingData, 102400);
+      totalCost += thirdTier * 0.07;
+      remainingData -= thirdTier;
+    }
+
+    if (remainingData > 0) {
+      // Remaining data at lowest tier
+      totalCost += remainingData * 0.05;
+    }
+
+    return totalCost;
+  }
 }

@@ -1,59 +1,39 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
-from enum import Enum
-
-class SourceType(str, Enum):
-    FILES = "files"
-    GIT = "git"
-    PLAN_JSON = "plan_json"
+from pydantic import BaseModel
+from typing import List, Dict, Optional, Any
 
 class TerraformEstimateRequest(BaseModel):
-    source: SourceType
+    source: str  # 'files', 'git', 'plan_json'
     gitUrl: Optional[str] = None
     branch: Optional[str] = "main"
-    files: Optional[Dict[str, str]] = None
-    planJson: Optional[Dict[str, Any]] = None
-    awsRegion: Optional[str] = "us-east-1"
-    awsAccessKey: Optional[str] = None
-    awsSecretKey: Optional[str] = None
+    terraformFiles: Optional[Dict[str, str]] = None
+    planJson: Optional[str] = None
 
 class ResourceCost(BaseModel):
     name: str
     type: str
+    monthlyCost: Optional[float] = 0
+    hourlyCost: Optional[float] = 0
+    details: Optional[Dict[str, Any]] = {}
+
+class ServiceCost(BaseModel):
+    name: str
     monthlyCost: float
-    hourlyCost: float
-    costComponents: List[Dict[str, Any]]
+    resources: List[ResourceCost]
 
-class CostSummary(BaseModel):
-    totalResources: int
-    resourcesByType: Dict[str, int]
-    costByService: Dict[str, float]
-
-class TerraformEstimateResponse(BaseModel):
-    success: bool
+class CostEstimateResponse(BaseModel):
     totalMonthlyCost: float
     totalHourlyCost: float
-    currency: str = "USD"
     resources: List[ResourceCost]
-    summary: CostSummary
-    breakdown: Optional[Dict[str, Any]] = None
+    services: List[ServiceCost]
+    breakdown: Dict[str, Any]
 
 class TerraformDiffRequest(BaseModel):
-    baseline: Dict[str, Any]
-    compare: Dict[str, Any]
+    baseConfig: Dict[str, Any]
+    newConfig: Dict[str, Any]
 
-class ResourceChange(BaseModel):
-    name: str
-    type: str
-    changeType: str  # added, removed, modified
-    baselineCost: float
-    compareCost: float
-    costDiff: float
-
-class TerraformDiffResponse(BaseModel):
-    success: bool
-    baselineCost: float
-    compareCost: float
-    totalMonthlyCostDiff: float
-    percentageChange: float
-    resourceChanges: List[ResourceChange]
+class CostDiffResponse(BaseModel):
+    addedCost: float
+    deletedCost: float
+    modifiedCost: float
+    totalDiff: float
+    breakdown: Dict[str, Any]

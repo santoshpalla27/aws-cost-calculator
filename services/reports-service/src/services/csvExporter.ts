@@ -1,59 +1,41 @@
-import { createObjectCsvWriter } from 'csv-writer';
-import { Report } from '../models/Report';
-import * as fs from 'fs';
-import * as path from 'path';
+import createCsvWriter from 'csv-writer';
+import { logger } from '../utils/logger';
 
 export class CSVExporter {
-    async exportReportToCSV(report: Report): Promise {
-        const tmpDir = '/tmp/reports';
-        if (!fs.existsSync(tmpDir)) {
-            fs.mkdirSync(tmpDir, { recursive: true });
-        }
+  generateReportCSV(report: any): string {
+    try {
+      // Prepare CSV data for resources
+      const resourcesData = report.data?.resources?.map((resource: any) => ({
+        'Resource Name': resource.name,
+        'Resource Type': resource.type,
+        'Monthly Cost': resource.monthlyCost,
+        'Hourly Cost': resource.hourlyCost,
+        'Details': JSON.stringify(resource.details || {})
+      })) || [];
 
-        const filePath = path.join(tmpDir, `report-\${report.id}.csv`);
+      // Create CSV writer
+      const csvWriter = createCsvWriter.createObjectCsvWriter({
+        path: 'temp.csv', // This won't be used since we return the content as string
+        header: [
+          { id: 'Resource Name', title: 'Resource Name' },
+          { id: 'Resource Type', title: 'Resource Type' },
+          { id: 'Monthly Cost', title: 'Monthly Cost' },
+          { id: 'Hourly Cost', title: 'Hourly Cost' },
+          { id: 'Details', title: 'Details' }
+        ]
+      });
 
-        if (report.type === 'terraform') {
-            return this.exportTerraformReport(report, filePath);
-        } else {
-            return this.exportGenericReport(report, filePath);
-        }
+      // Generate CSV content
+      let csvContent = 'Resource Name,Resource Type,Monthly Cost,Hourly Cost,Details\n';
+      
+      for (const resource of resourcesData) {
+        csvContent += `"${resource['Resource Name']}","${resource['Resource Type']}","${resource['Monthly Cost']}","${resource['Hourly Cost']}","${resource['Details']}"\n`;
+      }
+
+      return csvContent;
+    } catch (error) {
+      logger.error('Error generating CSV:', error);
+      throw error;
     }
-
-    private async exportTerraformReport(report: Report, filePath: string): Promise {
-        const csvWriter = createObjectCsvWriter({
-            path: filePath,
-            header: [
-                { id: 'name', title: 'Resource Name' },
-                { id: 'type', title: 'Resource Type' },
-                { id: 'monthlyCost', title: 'Monthly Cost' },
-                { id: 'hourlyCost', title: 'Hourly Cost' }
-            ]
-        });
-
-        const records = report.data.resources || [];
-        await csvWriter.writeRecords(records);
-
-        return filePath;
-    }
-
-    private async exportGenericReport(report: Report, filePath: string): Promise {
-        const csvWriter = createObjectCsvWriter({
-            path: filePath,
-            header: [
-                { id: 'field', title: 'Field' },
-                { id: 'value', title: 'Value' }
-            ]
-        });
-
-        const records = Object.entries(report.data).map(([key, value]) =& gt; ({
-            field: key,
-            value: JSON.stringify(value)
-        }));
-
-        await csvWriter.writeRecords(records);
-
-        return filePath;
-    }
+  }
 }
-
-export const csvExporter = new CSVExporter();

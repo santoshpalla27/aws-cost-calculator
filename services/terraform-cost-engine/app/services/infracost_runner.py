@@ -1,135 +1,128 @@
-import asyncio
-import json
-import tempfile
+import subprocess
 import os
-from typing import Dict, Any
+import json
 import logging
-
-from app.config import settings
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 class InfracostRunner:
-    """Service to run Infracost commands"""
-    
-    def __init__(self):
-        self.api_key = settings.INFRACOST_API_KEY
-        if not self.api_key:
-            logger.warning("INFRACOST_API_KEY not set - using default pricing")
-    
-    async def breakdown(self, work_dir: str) -&gt; Dict[str, Any]:
-        """Run infracost breakdown"""
-        logger.info(f"Running infracost breakdown in {work_dir}")
-        
-        env = os.environ.copy()
-        if self.api_key:
-            env['INFRACOST_API_KEY'] = self.api_key
-        
-        process = await asyncio.create_subprocess_exec(
-            'infracost', 'breakdown',
-            '--path', work_dir,
-            '--format', 'json',
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=settings.INFRACOST_TIMEOUT
-        )
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode()
-            logger.error(f"Infracost breakdown failed: {error_msg}")
-            raise Exception(f"Infracost breakdown failed: {error_msg}")
-        
-        result = json.loads(stdout.decode())
-        logger.info("Infracost breakdown completed successfully")
-        return result
-    
-    async def run_from_plan_json(self, plan_json: Dict[str, Any]) -&gt; Dict[str, Any]:
-        """Run infracost from Terraform plan JSON"""
-        logger.info("Running infracost from plan JSON")
-        
-        # Save plan JSON to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(plan_json, f)
-            plan_file = f.name
-        
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key
+
+    def run_infracost(self, working_dir: str, plan_file: Optional[str] = None) -> dict:
+        """
+        Run infracost breakdown in the specified directory
+        """
         try:
+            # Set environment variable for API key if provided
             env = os.environ.copy()
             if self.api_key:
                 env['INFRACOST_API_KEY'] = self.api_key
-            
-            process = await asyncio.create_subprocess_exec(
-                'infracost', 'breakdown',
-                '--path', plan_file,
-                '--format', 'json',
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+
+            if plan_file:
+                cmd = ["infracost", "breakdown", "--path", working_dir, "--format", "json", "--terraform-plan-flags", f"-var-file={plan_file}"]
+            else:
+                cmd = ["infracost", "breakdown", "--path", working_dir, "--format", "json"]
+
+            result = subprocess.run(
+                cmd,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout
+                env=env
             )
-            
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=settings.INFRACOST_TIMEOUT
-            )
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode()
-                logger.error(f"Infracost breakdown failed: {error_msg}")
-                raise Exception(f"Infracost breakdown failed: {error_msg}")
-            
-            result = json.loads(stdout.decode())
-            logger.info("Infracost breakdown from plan JSON completed")
-            return result
-            
-        finally:
-            os.unlink(plan_file)
-    
-    async def diff(self, baseline: Dict[str, Any], compare: Dict[str, Any]) -&gt; Dict[str, Any]:
-        """Run infracost diff between two configurations"""
-        logger.info("Running infracost diff")
-        
-        # Save baseline and compare to temp files
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(baseline, f)
-            baseline_file = f.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(compare, f)
-            compare_file = f.name
-        
+
+            if result.returncode != 0:
+                logger.error(f"Infracost breakdown failed: {result.stderr}")
+                raise Exception(f"Infracost breakdown failed: {result.stderr}")
+
+            logger.info("Infracost breakdown completed successfully")
+            return json.loads(result.stdout)
+
+        except subprocess.TimeoutExpired:
+            logger.error("Infracost breakdown timed out")
+            raise Exception("Infracost breakdown timed out")
+        except json.JSONDecodeError:
+            logger.error("Failed to parse Infracost output as JSON")
+            raise Exception("Failed to parse Infracost output as JSON")
+        except Exception as e:
+            logger.error(f"Error running infracost breakdown: {str(e)}")
+            raise
+
+    def run_infracost_with_plan_json(self, working_dir: str, plan_json_file: str) -> dict:
+        """
+        Run infracost breakdown using a plan JSON file
+        """
         try:
+            # Set environment variable for API key if provided
             env = os.environ.copy()
             if self.api_key:
                 env['INFRACOST_API_KEY'] = self.api_key
-            
-            process = await asyncio.create_subprocess_exec(
-                'infracost', 'diff',
-                '--path', baseline_file,
-                '--compare-to', compare_file,
-                '--format', 'json',
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+
+            cmd = ["infracost", "breakdown", "--path", plan_json_file, "--format", "json", "--terraform-plan-json"]
+
+            result = subprocess.run(
+                cmd,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout
+                env=env
             )
-            
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=settings.INFRACOST_TIMEOUT
+
+            if result.returncode != 0:
+                logger.error(f"Infracost breakdown failed: {result.stderr}")
+                raise Exception(f"Infracost breakdown failed: {result.stderr}")
+
+            logger.info("Infracost breakdown with plan JSON completed successfully")
+            return json.loads(result.stdout)
+
+        except subprocess.TimeoutExpired:
+            logger.error("Infracost breakdown timed out")
+            raise Exception("Infracost breakdown timed out")
+        except json.JSONDecodeError:
+            logger.error("Failed to parse Infracost output as JSON")
+            raise Exception("Failed to parse Infracost output as JSON")
+        except Exception as e:
+            logger.error(f"Error running infracost breakdown: {str(e)}")
+            raise
+
+    def run_infracost_diff(self, working_dir: str, plan_file: str) -> dict:
+        """
+        Run infracost diff to compare costs
+        """
+        try:
+            # Set environment variable for API key if provided
+            env = os.environ.copy()
+            if self.api_key:
+                env['INFRACOST_API_KEY'] = self.api_key
+
+            cmd = ["infracost", "diff", "--path", working_dir, "--format", "json", "--terraform-plan-flags", f"-var-file={plan_file}"]
+
+            result = subprocess.run(
+                cmd,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout
+                env=env
             )
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode()
-                logger.error(f"Infracost diff failed: {error_msg}")
-                raise Exception(f"Infracost diff failed: {error_msg}")
-            
-            result = json.loads(stdout.decode())
+
+            if result.returncode != 0:
+                logger.error(f"Infracost diff failed: {result.stderr}")
+                raise Exception(f"Infracost diff failed: {result.stderr}")
+
             logger.info("Infracost diff completed successfully")
-            return result
-            
-        finally:
-            os.unlink(baseline_file)
-            os.unlink(compare_file)
+            return json.loads(result.stdout)
+
+        except subprocess.TimeoutExpired:
+            logger.error("Infracost diff timed out")
+            raise Exception("Infracost diff timed out")
+        except json.JSONDecodeError:
+            logger.error("Failed to parse Infracost diff output as JSON")
+            raise Exception("Failed to parse Infracost diff output as JSON")
+        except Exception as e:
+            logger.error(f"Error running infracost diff: {str(e)}")
+            raise

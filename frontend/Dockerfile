@@ -8,17 +8,16 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine
+FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --only=production
+# Install serve to serve the static files
+RUN npm install -g serve
 
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.js ./
+# Copy the build output from the previous step
+COPY --from=builder /app/out ./out
 
 EXPOSE 3001
 
-CMD ["npm", "start"]
+CMD ["serve", "-s", "out", "-l", "3001"]

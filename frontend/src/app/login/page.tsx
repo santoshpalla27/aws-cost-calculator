@@ -1,101 +1,83 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useForm } from 'react-hook-form';
-import { Button } from '@/components/common/Button';
-import { Input } from '@/components/common/Input';
 import { Card } from '@/components/common/Card';
+import { Input } from '@/components/common/Input';
+import { Button } from '@/components/common/Button';
 import { useAuthStore } from '@/lib/store/authStore';
-import { Mail, Lock, AlertCircle } from 'lucide-react';
-
-interface LoginForm {
-    email: string;
-    password: string;
-}
 
 export default function LoginPage() {
-    const router = useRouter();
-    const { login } = useAuthStore();
-    const [error, setError] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+  const { login } = useAuthStore();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-    const {
-        register,
-        handleSubmit,
-        formState: { errors },
-    } = useForm < span ><span style="color: rgb(150, 34, 73); font-weight: bold;">&lt;loginform&gt;</span><span style="color: black; font-weight: normal;">();
-
-  const onSubmit = async (data: LoginForm) =&gt; {
-    setIsLoading(true);
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError('');
+    setLoading(true);
 
     try {
-      await login(data.email, data.password);
+      await login(email, password);
       router.push('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Login failed. Please try again.');
+      setError(err.message || 'Login failed');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    
-      
-        
-          
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
+        <div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
             InfraCost Analyzer Pro
-          
-          Sign in to your account
-        
+          </h2>
+          <p className="mt-2 text-center text-sm text-gray-600">
+            Sign in to your account
+          </p>
+        </div>
 
-        {error &amp;&amp; (
-          
-            
-            {error}
-          
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+            <span className="block sm:inline">{error}</span>
+          </div>
         )}
 
-        
-          
-            
-              Email
-            
-            
-              
-              
-            
-            {errors.email &amp;&amp; (
-              {errors.email.message}
-            )}
-          
+        <Card className="p-8">
+          <form className="space-y-6" onSubmit={handleLogin}>
+            <Input
+              label="Email address"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+            />
 
-          
-            
-              Password
-            
-            
-              
-              
-            
-            {errors.password &amp;&amp; (
-              {errors.password.message}
-            )}
-          
+            <Input
+              label="Password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+            />
 
-          
-            {isLoading ? 'Signing in...' : 'Sign In'}
-          
-        
-
-        
-          Don't have an account?{' '}
-          
-            Sign up
-          
-        
-      
-    
+            <Button 
+              type="submit" 
+              className="w-full"
+              disabled={loading}
+            >
+              {loading ? 'Signing in...' : 'Sign In'}
+            </Button>
+          </form>
+        </Card>
+      </div>
+    </div>
   );
 }

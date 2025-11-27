@@ -1,141 +1,113 @@
-import { RedisCache } from '../cache/redisCache';
+import { pricing } from '../config/aws';
 import { logger } from '../utils/logger';
+import { PriceCalculator } from '../utils/priceCalculator';
 
-export interface EKSCalculationRequest {
-    region: string;
-    clusterCount: number;
-    nodeGroups: Array & lt;{
-    instanceType: string;
-    nodeCount: number;
-    storageSize: number;
-}& gt;;
-fargateVCPU: number;
-fargateMemoryGB: number;
-awsAccessKey: string;
-awsSecretKey: string;
+export interface EKSNodeGroup {
+  instanceType: string;
+  nodeCount: number;
+  hourlyHours: number;
 }
 
-export interface EKSCalculationResult {
-    clusterCost: {
-        monthly: number;
-        hourly: number;
-    };
-    nodeGroupsCost: {
-        monthly: number;
-        breakdown: Array & lt;{
-    instanceType: string;
-    nodeCount: number;
-    monthlyCost: number;
-}& gt;;
+export interface EKSCostRequest {
+  region: string;
+  nodeGroups: EKSNodeGroup[];
+}
+
+export interface EKSCostResult {
+  monthlyCost: number;
+  breakdown: {
+    clusterCost: number;
+    nodeGroupCosts: Array<{
+      instanceType: string;
+      nodeCount: number;
+      monthlyCost: number;
+    }>;
+    addonCosts: number;
   };
-fargateCost: {
-    monthly: number;
-};
-totalMonthlyCost: number;
-totalHourlyCost: number;
-breakdown: any;
 }
 
 export class EKSPricingService {
-    private cache: RedisCache;
+  private priceCalculator: PriceCalculator;
 
-    constructor() {
-        this.cache = new RedisCache();
-    }
+  constructor() {
+    this.priceCalculator = new PriceCalculator();
+  }
 
-    async calculateEKSCost(request: EKSCalculationRequest): Promise {
-        try {
-            logger.info('Calculating EKS costs', {
-                clusterCount: request.clusterCount,
-                nodeGroups: request.nodeGroups.length
-            });
+  async calculateEKSCost(
+    region: string = 'us-east-1',
+    nodeGroups: EKSNodeGroup[]
+  ): Promise<EKSCostResult> {
+    try {
+      // EKS cluster cost is $0.10 per hour (as of 2023)
+      const clusterHourlyCost = 0.10;
+      const clusterMonthlyCost = clusterHourlyCost * 730; // 730 hours in a month
 
-            const cacheKey = this.generateCacheKey(request);
-            const cached = await this.cache.get(cacheKey);
-            if (cached) {
-                return JSON.parse(cached);
-            }
+      // Calculate node group costs
+      let totalNodeGroupCost = 0;
+      const nodeGroupCosts = [];
 
-            // EKS cluster cost: \$0.10 per hour per cluster
-            const clusterHourlyCost = 0.10 * request.clusterCount;
-            const clusterMonthlyCost = clusterHourlyCost * 730;
+      for (const nodeGroup of nodeGroups) {
+        const nodeHourlyCost = await this.getInstanceCost(nodeGroup.instanceType, region);
+        const nodeGroupMonthlyCost = nodeHourlyCost * nodeGroup.nodeCount * nodeGroup.hourlyHours;
+        
+        totalNodeGroupCost += nodeGroupMonthlyCost;
+        
+        nodeGroupCosts.push({
+          instanceType: nodeGroup.instanceType,
+          nodeCount: nodeGroup.nodeCount,
+          monthlyCost: parseFloat(nodeGroupMonthlyCost.toFixed(2))
+        });
+      }
 
-            // Calculate node groups cost
-            let nodeGroupsTotal = 0;
-            const nodeGroupsBreakdown = [];
+      // Calculate addon costs (simplified)
+      const addonMonthlyCost = 0; // Would include costs for VPC CNI, CoreDNS, kube-proxy in a real implementation
 
-            const ec2Pricing: { [key: string]: number } = {
-                't3.medium': 0.0416,
-                't3.large': 0.0832,
-                't3.xlarge': 0.1664,
-                'm5.large': 0.096,
-                'm5.xlarge': 0.192,
-                'm5.2xlarge': 0.384,
-                'c5.large': 0.085,
-                'c5.xlarge': 0.17
-            };
+      // Calculate total cost
+      const totalMonthlyCost = clusterMonthlyCost + totalNodeGroupCost + addonMonthlyCost;
 
-            for (const nodeGroup of request.nodeGroups) {
-                const instancePrice = ec2Pricing[nodeGroup.instanceType] || 0.10;
-                const nodeGroupMonthlyCost = instancePrice * 730 * nodeGroup.nodeCount;
-
-                // Add EBS cost
-                const ebsCost = nodeGroup.storageSize * 0.10 * nodeGroup.nodeCount;
-
-                const totalNodeGroupCost = nodeGroupMonthlyCost + ebsCost;
-                nodeGroupsTotal += totalNodeGroupCost;
-
-                nodeGroupsBreakdown.push({
-                    instanceType: nodeGroup.instanceType,
-                    nodeCount: nodeGroup.nodeCount,
-                    monthlyCost: parseFloat(totalNodeGroupCost.toFixed(2))
-                });
-            }
-
-            // Fargate pricing
-            // \$0.04048 per vCPU per hour
-            // \$0.004445 per GB per hour
-            const fargateVCPUCost = request.fargateVCPU * 0.04048 * 730;
-            const fargateMemoryCost = request.fargateMemoryGB * 0.004445 * 730;
-            const fargateTotalCost = fargateVCPUCost + fargateMemoryCost;
-
-            const totalMonthlyCost = clusterMonthlyCost + nodeGroupsTotal + fargateTotalCost;
-            const totalHourlyCost = totalMonthlyCost / 730;
-
-            const result: EKSCalculationResult = {
-                clusterCost: {
-                    monthly: parseFloat(clusterMonthlyCost.toFixed(2)),
-                    hourly: parseFloat(clusterHourlyCost.toFixed(4))
-                },
-                nodeGroupsCost: {
-                    monthly: parseFloat(nodeGroupsTotal.toFixed(2)),
-                    breakdown: nodeGroupsBreakdown
-                },
-                fargateCost: {
-                    monthly: parseFloat(fargateTotalCost.toFixed(2))
-                },
-                totalMonthlyCost: parseFloat(totalMonthlyCost.toFixed(2)),
-                totalHourlyCost: parseFloat(totalHourlyCost.toFixed(4)),
-                breakdown: {
-                    region: request.region,
-                    clusterCount: request.clusterCount,
-                    nodeGroupCount: request.nodeGroups.length,
-                    fargateVCPU: request.fargateVCPU,
-                    fargateMemoryGB: request.fargateMemoryGB
-                }
-            };
-
-            await this.cache.set(cacheKey, JSON.stringify(result), 3600);
-
-            return result;
-
-        } catch (error) {
-            logger.error('Error calculating EKS costs:', error);
-            throw error;
+      return {
+        monthlyCost: parseFloat(totalMonthlyCost.toFixed(2)),
+        breakdown: {
+          clusterCost: parseFloat(clusterMonthlyCost.toFixed(2)),
+          nodeGroupCosts,
+          addonCosts: parseFloat(addonMonthlyCost.toFixed(2))
         }
+      };
+    } catch (error) {
+      logger.error('Error calculating EKS cost:', error);
+      throw error;
     }
+  }
 
-    private generateCacheKey(request: EKSCalculationRequest): string {
-        return `eks:\${request.region}:\${request.clusterCount}:\${JSON.stringify(request.nodeGroups)}`;
-    }
+  private async getInstanceCost(
+    instanceType: string,
+    region: string
+  ): Promise<number> {
+    // This is a simplified implementation similar to EC2 pricing
+    // In a real system, this would query the AWS Pricing API
+    const priceMap: { [key: string]: number } = {
+      // Sample pricing data (these are illustrative, not real prices)
+      't3.micro': 0.0116,
+      't3.small': 0.0232,
+      't3.medium': 0.0464,
+      't3.large': 0.0928,
+      'm5.large': 0.096,
+      'm5.xlarge': 0.192,
+      'm5.2xlarge': 0.384,
+      'c5.large': 0.085,
+      'c5.xlarge': 0.17,
+      'c5.2xlarge': 0.34,
+      'r5.large': 0.126,
+      'r5.xlarge': 0.252,
+      'r5.2xlarge': 0.504,
+    };
+
+    // Determine the base price based on instance type
+    const basePrice = priceMap[instanceType] || 0.1; // Default to $0.10/hr if not found
+    
+    // Adjust based on region
+    const regionMultiplier = region.startsWith('us-') ? 1.0 : 1.1;
+    
+    return basePrice * regionMultiplier;
+  }
 }
