@@ -1,21 +1,14 @@
 FROM node:18-alpine
 
-# Install Terraform
-RUN apk add --no-cache curl unzip git && \
-    curl -fsSL https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip -o terraform.zip && \
-    unzip terraform.zip && \
-    mv terraform /usr/local/bin/ && \
-    rm terraform.zip
-
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci --only=production
 
 COPY . .
 
-EXPOSE 3001
+RUN mkdir -p uploads logs
 
-CMD ["node", "server.js"]
+EXPOSE 3000
 
-
+CMD ["node", "src/app.js"]

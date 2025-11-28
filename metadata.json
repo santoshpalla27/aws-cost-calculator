@@ -1,5 +1,0 @@
-{
-  "name": "OpenCost - AWS Terraform Cost Estimator",
-  "description": "A client-side AWS cost estimation tool that parses Terraform plan JSON files to visualize, calculate, and compare infrastructure costs without external SaaS dependencies.",
-  "requestFramePermissions": []
-}
