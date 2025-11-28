@@ -18,11 +18,15 @@ export class TerraformParserService {
 
   async parseDirectory(dirPath) {
     try {
+      logger.info(`Parsing directory: ${dirPath}`);
       const structure = await this.buildDirectoryStructure(dirPath);
+      logger.info(`Directory structure: ${JSON.stringify(structure, null, 2)}`);
+      
       await this.parseFiles(structure);
       await this.resolveModules(dirPath);
       this.resolveReferences();
       
+      logger.info(`Parsed data summary: ${this.parsedData.resources.length} resources found.`);
       return this.parsedData;
     } catch (error) {
       logger.error('Error parsing Terraform directory:', error);
@@ -76,9 +80,28 @@ export class TerraformParserService {
 
   async parseFile(filePath) {
     try {
+      logger.info(`Parsing file: ${filePath}`);
       const content = await fs.readFile(filePath, 'utf-8');
-      const parsed = parse(filePath, content);
+      
+      // Attempt to parse
+      let parsed;
+      try {
+        parsed = parse(filePath, content);
+      } catch (parseError) {
+        logger.error(`HCL Parse error for ${filePath}:`, parseError);
+        return; // Skip file if parsing fails
+      }
+      
+      // Log the raw parsed output for debugging
+      logger.info(`Raw parsed content for ${path.basename(filePath)}: ${JSON.stringify(parsed, null, 2)}`);
 
+      if (!parsed) return;
+
+      // hcl2-parser might return an array if multiple blocks are present, 
+      // but usually it aggregates them. Let's handle the standard output structure.
+      // If parsed is an array (which can happen with some HCL parsers), we might need to iterate.
+      // But based on the existing code, it expects an object. 
+      
       // Extract resources
       if (parsed.resource) {
         for (const [resourceType, resources] of Object.entries(parsed.resource)) {
