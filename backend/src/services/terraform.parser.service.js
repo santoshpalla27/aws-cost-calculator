@@ -1,4 +1,5 @@
-import { parse } from 'hcl2-parser';
+import pkg from 'hcl2-parser';
+const { parse } = pkg;
 import fs from 'fs/promises';
 import path from 'path';
 import logger from '../config/logger.config.js';
