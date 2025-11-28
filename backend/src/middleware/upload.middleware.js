@@ -8,13 +8,14 @@ import logger from '../config/logger.config.js';
 
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    const uploadId = uuidv4();
-    const uploadPath = path.join(config.uploadDir, uploadId);
-    
     try {
-      await fs.mkdir(uploadPath, { recursive: true });
-      req.uploadPath = uploadPath;
-      cb(null, uploadPath);
+      if (!req.uploadPath) {
+        const uploadId = uuidv4();
+        const uploadPath = path.join(config.uploadDir, uploadId);
+        await fs.mkdir(uploadPath, { recursive: true });
+        req.uploadPath = uploadPath;
+      }
+      cb(null, req.uploadPath);
     } catch (error) {
       cb(error);
     }

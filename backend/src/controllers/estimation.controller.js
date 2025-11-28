@@ -149,9 +149,9 @@ export class EstimationController {
   }
 
   extractCredentials(req) {
-    const accessKeyId = req.body.aws_access_key_id || req.headers['x-aws-access-key-id'];
-    const secretAccessKey = req.body.aws_secret_access_key || req.headers['x-aws-secret-access-key'];
-    const sessionToken = req.body.aws_session_token || req.headers['x-aws-session-token'];
+    const accessKeyId = req.body.aws_access_key_id || req.headers['x-aws-access-key-id'] || process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = req.body.aws_secret_access_key || req.headers['x-aws-secret-access-key'] || process.env.AWS_SECRET_ACCESS_KEY;
+    const sessionToken = req.body.aws_session_token || req.headers['x-aws-session-token'] || process.env.AWS_SESSION_TOKEN;
 
     if (!accessKeyId || !secretAccessKey) {
       throw new Error('AWS credentials are required');
