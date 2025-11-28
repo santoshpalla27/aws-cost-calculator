@@ -1,6 +1,7 @@
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import unzipper from 'unzipper';
 import { config } from '../config/app.config.js';
@@ -84,7 +85,7 @@ export const processUpload = async (req, res, next) => {
 
 async function extractZip(zipPath, destPath) {
   return new Promise((resolve, reject) => {
-    fs.createReadStream(zipPath)
+    createReadStream(zipPath)
       .pipe(unzipper.Extract({ path: destPath }))
       .on('close', resolve)
       .on('error', reject);
