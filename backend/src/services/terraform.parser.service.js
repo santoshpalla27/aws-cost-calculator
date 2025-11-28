@@ -1,5 +1,7 @@
-import pkg from 'hcl2-parser';
-const { parse } = pkg;
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const hcl = require('hcl2-parser');
+
 import fs from 'fs/promises';
 import path from 'path';
 import logger from '../config/logger.config.js';
@@ -86,7 +88,17 @@ export class TerraformParserService {
       // Attempt to parse
       let parsed;
       try {
-        parsed = parse(filePath, content);
+        // Use parseToObject which is the standard method for hcl2-parser
+        // It might return an array if there are multiple blocks, or an object.
+        // Note: hcl2-parser typically returns an array of objects for each block type if using parseToObject?
+        // Let's check if hcl has parseToObject
+        if (typeof hcl.parseToObject === 'function') {
+           parsed = hcl.parseToObject(content);
+        } else {
+           // Fallback or debug
+           logger.error(`hcl2-parser does not have parseToObject. Keys: ${Object.keys(hcl)}`);
+           throw new Error('hcl2-parser interface mismatch');
+        }
       } catch (parseError) {
         logger.error(`HCL Parse error for ${filePath}:`, parseError);
         return; // Skip file if parsing fails
@@ -96,15 +108,20 @@ export class TerraformParserService {
       logger.info(`Raw parsed content for ${path.basename(filePath)}: ${JSON.stringify(parsed, null, 2)}`);
 
       if (!parsed) return;
-
-      // hcl2-parser might return an array if multiple blocks are present, 
-      // but usually it aggregates them. Let's handle the standard output structure.
-      // If parsed is an array (which can happen with some HCL parsers), we might need to iterate.
-      // But based on the existing code, it expects an object. 
       
+      // hcl2-parser returns an array of objects. We need to merge them if so, or handle them.
+      // Actually, parseToObject typically returns a single object with keys like "resource", "variable", etc.
+      // EXCEPT if the input has duplicates, it might behavior differently. 
+      // But typically it returns { resource: { ... }, variable: { ... } }
+      
+      // If parsed is an array (sometimes it returns [ { resource: ... } ]), we should normalize.
+      const parsedObj = Array.isArray(parsed) ? parsed[0] : parsed;
+
+      if (!parsedObj) return;
+
       // Extract resources
-      if (parsed.resource) {
-        for (const [resourceType, resources] of Object.entries(parsed.resource)) {
+      if (parsedObj.resource) {
+        for (const [resourceType, resources] of Object.entries(parsedObj.resource)) {
           for (const [resourceName, config] of Object.entries(resources)) {
             this.parsedData.resources.push({
               type: resourceType,
@@ -117,24 +134,24 @@ export class TerraformParserService {
       }
 
       // Extract variables
-      if (parsed.variable) {
+      if (parsedObj.variable) {
         this.parsedData.variables = {
           ...this.parsedData.variables,
-          ...parsed.variable
+          ...parsedObj.variable
         };
       }
 
       // Extract locals
-      if (parsed.locals) {
+      if (parsedObj.locals) {
         this.parsedData.locals = {
           ...this.parsedData.locals,
-          ...parsed.locals
+          ...parsedObj.locals
         };
       }
 
       // Extract data sources
-      if (parsed.data) {
-        for (const [dataType, dataSources] of Object.entries(parsed.data)) {
+      if (parsedObj.data) {
+        for (const [dataType, dataSources] of Object.entries(parsedObj.data)) {
           for (const [dataName, config] of Object.entries(dataSources)) {
             this.parsedData.dataSource[`${dataType}.${dataName}`] = config;
           }
@@ -142,8 +159,8 @@ export class TerraformParserService {
       }
 
       // Extract modules
-      if (parsed.module) {
-        for (const [moduleName, moduleConfig] of Object.entries(parsed.module)) {
+      if (parsedObj.module) {
+        for (const [moduleName, moduleConfig] of Object.entries(parsedObj.module)) {
           this.parsedData.modules.push({
             name: moduleName,
             source: moduleConfig.source,
@@ -154,10 +171,10 @@ export class TerraformParserService {
       }
 
       // Extract outputs
-      if (parsed.output) {
+      if (parsedObj.output) {
         this.parsedData.outputs = {
           ...this.parsedData.outputs,
-          ...parsed.output
+          ...parsedObj.output
         };
       }
 
