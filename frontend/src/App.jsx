@@ -7,7 +7,7 @@ import CostEstimation from './components/CostEstimation';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorDisplay from './components/ErrorDisplay';
 import { estimateCost } from './services/api';
-import './App.css';
+import './index.css';
 
 function App() {
   const [files, setFiles] = useState([]);
