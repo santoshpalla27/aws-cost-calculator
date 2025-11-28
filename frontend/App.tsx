@@ -318,7 +318,7 @@ const App: React.FC = () => {
                             </div>
 
                             {/* Resource List */}
-                            <div className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+                            <div className="lg:col-span-2 bg-slate-800 rounded-xl border border-slate-700">
                                 <div className="p-6 border-b border-slate-700 flex justify-between items-center">
                                     <h3 className="text-lg font-semibold text-white">Resource Breakdown</h3>
                                     <div className="flex items-center gap-2 text-xs bg-slate-700 text-slate-300 px-3 py-1.5 rounded-full">
@@ -326,7 +326,7 @@ const App: React.FC = () => {
                                         {fileName}
                                     </div>
                                 </div>
-                                <div className="overflow-x-auto">
+                                <div>
                                     <table className="w-full text-left text-sm">
                                         <thead className="bg-slate-900/50 text-slate-400 uppercase font-medium">
                                             <tr>
