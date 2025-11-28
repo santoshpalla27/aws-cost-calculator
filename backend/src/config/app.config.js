@@ -14,5 +14,6 @@ export const config = {
   aws: {
     defaultRegion: process.env.AWS_DEFAULT_REGION || 'us-east-1',
     pricingRegion: 'us-east-1' // Pricing API only available in us-east-1
-  }
+  },
+  corsOrigin: process.env.CORS_ORIGIN || '*'
 };
