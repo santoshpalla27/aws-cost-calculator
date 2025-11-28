@@ -124,3 +124,8 @@ The application uses environment variables for AWS credentials and configuration
 - Ensure your AWS credentials have access to the AWS Pricing API
 - Check that Terraform CLI is properly installed when running locally
 - Review the backend logs for any API access issues
+
+
+
+
+improve new services and check the cost compare with infracost and also add more functionalities like reltime cost comparion using cost explorer api for everyday drift and also a ui for cost estimation with infra options to select and calculate the cost with real time pricing with a good customaizaing options rich ui

@@ -140,6 +140,7 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
                     accept=".json,.tf"
                     multiple={allowMultiple}
                     onChange={(e) => handleFiles(e.target.files)}
+                    onClick={(e) => e.stopPropagation()}
                 />
 
                 {/* Directory Input */}
@@ -149,6 +150,7 @@ export const PlanUploader: React.FC<PlanUploaderProps> = ({ onUpload, label, all
                     className="hidden"
                     {...({ webkitdirectory: "", directory: "" } as any)}
                     onChange={(e) => handleFiles(e.target.files)}
+                    onClick={(e) => e.stopPropagation()}
                 />
             </div>
 
