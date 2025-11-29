@@ -2,27 +2,28 @@ import logger from '../config/logger.config.js';
 
 export class DataMockerService {
   shouldMockValue(resourceType, attributeName, currentValue) {
-    // Only mock if value is undefined/null OR is an unresolved Terraform reference
+    // Don't mock if we have a real value
     if (currentValue !== undefined && 
         currentValue !== null && 
+        currentValue !== '' &&
         !this.isUnresolvedReference(currentValue)) {
       return false;
     }
 
-    // Only mock if attribute is absolutely required for cost calculation
     return this.isRequiredForCosting(resourceType, attributeName);
   }
 
   isUnresolvedReference(value) {
     if (typeof value !== 'string') return false;
+    if (value === '') return true;
     
     // Check for unresolved Terraform references
     const patterns = [
-      /\$\{var\./,
-      /\$\{data\./,
-      /\$\{local\./,
-      /\$\{module\./,
-      /\$\{aws_/
+      /^\$\{var\./,
+      /^\$\{data\./,
+      /^\$\{local\./,
+      /^\$\{module\./,
+      /^\$\{aws_/
     ];
 
     return patterns.some(pattern => pattern.test(value));
