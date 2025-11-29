@@ -52,7 +52,7 @@ export class DataMockerService {
         if (this.shouldMockValue('aws_instance', 'instance_type', mocked.instance_type)) {
           mocked.instance_type = 't3.small';
           hasMocked.attributes.push('instance_type');
-          logger.warn(`Mocked instance_type for \${resource.name}: t3.small`);
+          logger.warn(`Mocked instance_type for ${resource.name}: t3.small`);
         }
         break;
 
@@ -60,12 +60,12 @@ export class DataMockerService {
         if (this.shouldMockValue('aws_db_instance', 'instance_class', mocked.instance_class)) {
           mocked.instance_class = 'db.t3.micro';
           hasMocked.attributes.push('instance_class');
-          logger.warn(`Mocked instance_class for \${resource.name}: db.t3.micro`);
+          logger.warn(`Mocked instance_class for ${resource.name}: db.t3.micro`);
         }
         if (this.shouldMockValue('aws_db_instance', 'engine', mocked.engine)) {
           mocked.engine = 'mysql';
           hasMocked.attributes.push('engine');
-          logger.warn(`Mocked engine for \${resource.name}: mysql`);
+          logger.warn(`Mocked engine for ${resource.name}: mysql`);
         }
         break;
 
@@ -110,14 +110,14 @@ export class DataMockerService {
     for (const resource of resources) {
       if (resource.mocked && resource.mocked.attributes.length > 0) {
         report.mockedResources++;
-        report.mockedAttributes[`\${resource.type}.\${resource.name}`] = 
+        report.mockedAttributes[`${resource.type}.${resource.name}`] = 
           resource.mocked.attributes;
       }
     }
 
     if (report.mockedResources > 0) {
       report.warnings.push(
-        `\${report.mockedResources} resources had minimal attributes mocked (\${Object.keys(report.mockedAttributes).length} total). ` +
+        `${report.mockedResources} resources had minimal attributes mocked (${Object.keys(report.mockedAttributes).length} total). ` +
         `Provide complete Terraform configuration for 100% accuracy.`
       );
     }

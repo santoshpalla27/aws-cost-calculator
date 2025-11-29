@@ -44,9 +44,9 @@ export class CostCalculatorService {
           costBreakdown.summary.hourly += cost.hourly || 0;
         }
       } catch (error) {
-        logger.error(`Error calculating cost for \${resource.type}.\${resource.name}:`, error);
+        logger.error(`Error calculating cost for ${resource.type}.${resource.name}:`, error);
         costBreakdown.errors.push({
-          resource: `\${resource.type}.\${resource.name}`,
+          resource: `${resource.type}.${resource.name}`,
           error: error.message
         });
       }
@@ -85,7 +85,7 @@ export class CostCalculatorService {
       case 'aws_autoscaling_group':
         return await this.calculateAutoScalingGroupCost(resource, region);
       default:
-        logger.debug(`Cost calculation not supported for \${resource.type}`);
+        logger.debug(`Cost calculation not supported for ${resource.type}`);
         return null;
     }
   }
@@ -233,10 +233,10 @@ export class CostCalculatorService {
   formatCostSummary(costBreakdown) {
     return {
       summary: {
-        hourly: `\$\${costBreakdown.summary.hourly.toFixed(4)}`,
-        daily: `\$\${costBreakdown.summary.daily.toFixed(2)}`,
-        monthly: `\$\${costBreakdown.summary.monthly.toFixed(2)}`,
-        yearly: `\$\${costBreakdown.summary.yearly.toFixed(2)}`
+        hourly: `$${costBreakdown.summary.hourly.toFixed(4)}`,
+        daily: `$${costBreakdown.summary.daily.toFixed(2)}`,
+        monthly: `$${costBreakdown.summary.monthly.toFixed(2)}`,
+        yearly: `$${costBreakdown.summary.yearly.toFixed(2)}`
       },
       resourceCount: costBreakdown.resources.length,
       region: costBreakdown.region,

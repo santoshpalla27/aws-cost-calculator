@@ -166,7 +166,7 @@ export class AWSPricingService {
   }
 
   async getNATGatewayPricing(region) {
-    const cacheKey = `nat-gateway-\${region}`;
+    const cacheKey = `nat-gateway-${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
@@ -183,45 +183,62 @@ export class AWSPricingService {
       const command = new GetProductsCommand({
         ServiceCode: 'AmazonEC2',
         Filters: filters,
-        MaxResults: 10
+        MaxResults: 50
       });
 
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No NAT Gateway pricing found for \${region}`);
+        throw new Error(`No NAT Gateway pricing found for ${region}`);
       }
 
-      const priceData = JSON.parse(response.PriceList[0]);
-      const onDemandTerms = priceData.terms.OnDemand;
-      const firstTerm = Object.values(onDemandTerms)[0];
-      const priceDimensions = Object.values(firstTerm.priceDimensions);
+      // Parse all price items to find hourly and data processing rates
+      let pricePerHour = null;
+      let dataProcessingPerGB = null;
 
-      // Find hourly rate and data processing rate
-      const hourlyDimension = priceDimensions.find(pd => 
-        pd.description && pd.description.toLowerCase().includes('hour')
-      );
+      for (const priceItem of response.PriceList) {
+        const priceData = JSON.parse(priceItem);
+        const onDemandTerms = priceData.terms.OnDemand;
+        const firstTerm = Object.values(onDemandTerms)[0];
+        const priceDimensions = Object.values(firstTerm.priceDimensions);
 
-      const dataProcessingDimension = priceDimensions.find(pd => 
-        pd.description && pd.description.toLowerCase().includes('data processed')
-      );
+        for (const dimension of priceDimensions) {
+          const desc = (dimension.description || '').toLowerCase();
+          const unit = (dimension.unit || '').toLowerCase();
+          
+          // Find hourly charge
+          if (unit === 'hrs' || desc.includes('per hour') || desc.includes('natgateway-hours')) {
+            pricePerHour = parseFloat(dimension.pricePerUnit.USD);
+          }
+          
+          // Find data processing charge
+          if (unit === 'gb' || desc.includes('data processed') || desc.includes('natgateway-bytes')) {
+            dataProcessingPerGB = parseFloat(dimension.pricePerUnit.USD);
+          }
+        }
+
+        // If we found both, we can stop
+        if (pricePerHour !== null && dataProcessingPerGB !== null) {
+          break;
+        }
+      }
+
+      if (pricePerHour === null || dataProcessingPerGB === null) {
+        throw new Error(`Could not parse NAT Gateway pricing dimensions for ${region}`);
+      }
 
       const pricing = {
         region,
-        pricePerHour: hourlyDimension ? parseFloat(hourlyDimension.pricePerUnit.USD) : null,
-        dataProcessingPerGB: dataProcessingDimension ? parseFloat(dataProcessingDimension.pricePerUnit.USD) : null,
+        pricePerHour,
+        dataProcessingPerGB,
         currency: 'USD'
       };
-
-      if (!pricing.pricePerHour || !pricing.dataProcessingPerGB) {
-        throw new Error('Invalid NAT Gateway pricing data structure');
-      }
 
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
       logger.error(`Error fetching NAT Gateway pricing:`, error);
-      throw new Error(`Unable to fetch NAT Gateway pricing for \${region}`);
+      throw new Error(`Unable to fetch NAT Gateway pricing for ${region}: ${error.message}`);
     }
   }
 
