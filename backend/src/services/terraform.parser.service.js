@@ -31,6 +31,24 @@ export class TerraformParserService {
       this.resolveReferences();
       this.resolveLaunchTemplateReferences(this.parsedData.resources);
       
+      logger.info(`========================================`);
+      logger.info(`Parsing complete!`);
+      logger.info(`Total resources found: ${this.parsedData.resources.length}`);
+      logger.info(`Resource breakdown:`);
+      
+      const typeCount = {};
+      for (const resource of this.parsedData.resources) {
+        typeCount[resource.type] = (typeCount[resource.type] || 0) + 1;
+      }
+      
+      for (const [type, count] of Object.entries(typeCount)) {
+        logger.info(`  - ${type}: ${count}`);
+      }
+      logger.info(`========================================`);
+      
+      this.resolveReferences();
+      this.resolveLaunchTemplateReferences(this.parsedData.resources);
+      
       return this.parsedData;
     } catch (error) {
       logger.error('Error parsing Terraform directory:', error);
