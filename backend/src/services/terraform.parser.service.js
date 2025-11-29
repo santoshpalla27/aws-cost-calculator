@@ -358,8 +358,20 @@ export class TerraformParserService {
   }
 
   resolveReferences() {
+    logger.info('Resolving variable references in resources...');
+    
     for (const resource of this.parsedData.resources) {
       resource.config = this.resolveConfigReferences(resource.config);
+    }
+    
+    // Log resolved values for debugging
+    for (const resource of this.parsedData.resources) {
+      if (resource.type === 'aws_instance' && resource.config.instance_type) {
+        logger.info(`Resource ${resource.name} instance_type resolved to: ${resource.config.instance_type}`);
+      }
+      if (resource.type === 'aws_db_instance' && resource.config.instance_class) {
+        logger.info(`Resource ${resource.name} instance_class resolved to: ${resource.config.instance_class}`);
+      }
     }
   }
 
@@ -368,9 +380,16 @@ export class TerraformParserService {
     
     for (const resource of resources) {
       if (resource.type === 'aws_launch_template') {
+        // Resolve instance_type if it's a variable reference
         let instanceType = resource.config.instance_type;
-        if (typeof instanceType === 'string' && instanceType.includes('var.')) {
-          instanceType = this.resolveStringReference(instanceType);
+        
+        if (typeof instanceType === 'string') {
+          // Try to resolve variable reference
+          const resolved = this.resolveStringReference(instanceType);
+          if (resolved !== instanceType) {
+            instanceType = resolved;
+            logger.info(`Resolved launch template ${resource.name} instance_type: ${instanceType}`);
+          }
         }
         
         const resolvedConfig = {
@@ -383,17 +402,47 @@ export class TerraformParserService {
       }
     }
     
+    // Now resolve ASG references to launch templates
     for (const resource of resources) {
-      if (resource.type === 'aws_autoscaling_group' && resource.config.launch_template) {
-        const ltConfig = resource.config.launch_template;
-        if (Array.isArray(ltConfig)) {
-          const ltRef = ltConfig[0];
+      if (resource.type === 'aws_autoscaling_group') {
+        // Handle mixed_instances_policy
+        if (resource.config.mixed_instances_policy) {
+          const mip = Array.isArray(resource.config.mixed_instances_policy) 
+            ? resource.config.mixed_instances_policy[0] 
+            : resource.config.mixed_instances_policy;
+          
+          if (mip.launch_template) {
+            const lt = Array.isArray(mip.launch_template) ? mip.launch_template[0] : mip.launch_template;
+            if (lt.launch_template_specification) {
+              const lts = Array.isArray(lt.launch_template_specification) 
+                ? lt.launch_template_specification[0] 
+                : lt.launch_template_specification;
+              
+              const ltIdMatch = String(lts.launch_template_id || '').match(/aws_launch_template\.([^.]+)/);
+              if (ltIdMatch) {
+                const ltName = ltIdMatch[1];
+                const template = launchTemplates.get(ltName);
+                if (template) {
+                  resource.config._resolved_launch_template = template;
+                  logger.info(`Resolved launch template for ASG ${resource.name}: ${ltName} (instance_type: ${template.instance_type})`);
+                }
+              }
+            }
+          }
+        }
+        
+        // Handle regular launch_template
+        if (resource.config.launch_template) {
+          const ltConfig = resource.config.launch_template;
+          const ltRef = Array.isArray(ltConfig) ? ltConfig[0] : ltConfig;
           const ltIdMatch = String(ltRef.id || '').match(/aws_launch_template\.([^.]+)/);
+          
           if (ltIdMatch) {
             const ltName = ltIdMatch[1];
             const template = launchTemplates.get(ltName);
             if (template) {
               resource.config._resolved_launch_template = template;
+              logger.info(`Resolved launch template for ASG ${resource.name}: ${ltName} (instance_type: ${template.instance_type})`);
             }
           }
         }
@@ -426,28 +475,36 @@ export class TerraformParserService {
   resolveStringReference(str) {
     if (typeof str !== 'string') return str;
     
-    let cleanStr = str;
-    const varRefMatch = str.match(/^\$\{(.+)\}\$/);
+    // Handle ${var.xxx} pattern
+    const varRefMatch = str.match(/^\$\{var\.([a-zA-Z_][a-zA-Z0-9_]*)\}$/);
     if (varRefMatch) {
-      cleanStr = varRefMatch[1];
+      const varName = varRefMatch[1];
+      return this.getVariableDefault(varName, str);
     }
     
-    const varMatch = cleanStr.match(/^var\.([a-zA-Z_][a-zA-Z0-9_]*)/);
-    if (varMatch) {
-      const varName = varMatch[1];
-      const varData = this.parsedData.variables[varName];
-      
-      if (varData) {
-        const actualVar = Array.isArray(varData) ? varData[0] : varData;
-        if (actualVar && actualVar.default !== undefined) {
-          logger.info(`Resolved var.${varName} = ${actualVar.default}`);
-          return actualVar.default;
+    // Handle var.xxx pattern (without ${})
+    const simpleVarMatch = str.match(/^var\.([a-zA-Z_][a-zA-Z0-9_]*)$/);
+    if (simpleVarMatch) {
+      const varName = simpleVarMatch[1];
+      return this.getVariableDefault(varName, str);
+    }
+    
+    // Handle embedded ${var.xxx} in strings
+    if (str.includes('${var.')) {
+      let resolved = str;
+      const embeddedMatches = str.matchAll(/\$\{var\.([a-zA-Z_][a-zA-Z0-9_]*)\}/g);
+      for (const match of embeddedMatches) {
+        const varName = match[1];
+        const value = this.getVariableDefault(varName, match[0]);
+        if (value !== match[0]) {
+          resolved = resolved.replace(match[0], value);
         }
       }
-      logger.warn(`Could not resolve var.${varName}, keeping original`);
+      return resolved;
     }
 
-    const localMatch = cleanStr.match(/^local\.([a-zA-Z_][a-zA-Z0-9_]*)/);
+    // Handle local.xxx references
+    const localMatch = str.match(/^\$\{local\.([a-zA-Z_][a-zA-Z0-9_]*)\}$/);
     if (localMatch) {
       const localName = localMatch[1];
       if (this.parsedData.locals[localName] !== undefined) {
@@ -456,6 +513,22 @@ export class TerraformParserService {
     }
 
     return str;
+  }
+
+  getVariableDefault(varName, fallback) {
+    const varData = this.parsedData.variables[varName];
+    
+    if (varData) {
+      // Handle array format from HCL parser
+      const actualVar = Array.isArray(varData) ? varData[0] : varData;
+      if (actualVar && actualVar.default !== undefined) {
+        logger.info(`Resolved var.${varName} = ${actualVar.default}`);
+        return actualVar.default;
+      }
+    }
+    
+    logger.warn(`Could not resolve var.${varName}, no default value found`);
+    return fallback;
   }
 
   getResourcesByType(type) {

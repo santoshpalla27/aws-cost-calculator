@@ -2,20 +2,24 @@ import logger from '../config/logger.config.js';
 
 export class DataMockerService {
   shouldMockValue(resourceType, attributeName, currentValue) {
-    // Don't mock if we have a real value
+    // Don't mock if we have a real, resolved value
     if (currentValue !== undefined && 
         currentValue !== null && 
         currentValue !== '') {
       
-      // Check if it's an unresolved variable reference
+      // Check if it's still an unresolved variable reference
       if (typeof currentValue === 'string') {
-        // If it's still a ${var.xxx} reference, it should be mocked
-        if (currentValue.match(/^\$\{var\.[^}]+\}$/)) {
+        // If it still contains ${var. or ${local. etc., it needs mocking
+        if (currentValue.includes('${var.') || 
+            currentValue.includes('${local.') ||
+            currentValue.includes('${data.')) {
+          logger.warn(`Unresolved reference in ${resourceType}.${attributeName}: ${currentValue}`);
           return this.isRequiredForCosting(resourceType, attributeName);
         }
-        // If it looks like a real value, don't mock
+        // Real value, don't mock
         return false;
       }
+      // Non-string value, don't mock
       return false;
     }
 
