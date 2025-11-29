@@ -137,7 +137,7 @@ export class TerraformParserService {
               this.parsedData.resources.push({
                 type: resourceType,
                 name: resourceName,
-                config: config,
+                config: Array.isArray(config) ? config[0] : config,
                 file: filePath
               });
             }
@@ -182,11 +182,12 @@ export class TerraformParserService {
         
         for (const moduleObj of moduleList) {
           for (const [moduleName, moduleConfig] of Object.entries(moduleObj)) {
-            logger.info('Found module: ' + moduleName + ' with source: ' + moduleConfig.source);
+            const actualConfig = Array.isArray(moduleConfig) ? moduleConfig[0] : moduleConfig;
+            logger.info('Found module: ' + moduleName + ' with source: ' + actualConfig.source + ', count: ' + (actualConfig.count || 1));
             this.parsedData.modules.push({
               name: moduleName,
-              source: moduleConfig.source,
-              config: moduleConfig,
+              source: actualConfig.source,
+              config: actualConfig,
               file: filePath
             });
           }
@@ -213,7 +214,12 @@ export class TerraformParserService {
     logger.info('Found ' + this.parsedData.modules.length + ' module declarations');
     
     for (const module of this.parsedData.modules) {
-      if (!module.source || module.source.startsWith('http')) {
+      if (!module.source) {
+        logger.warn('Module ' + module.name + ' has no source, skipping');
+        continue;
+      }
+      
+      if (module.source.startsWith('http')) {
         logger.info('Skipping remote module: ' + module.name);
         continue;
       }
@@ -292,10 +298,11 @@ export class TerraformParserService {
                 for (const resourceObj of resourceList) {
                   for (const [resourceName, config] of Object.entries(resourceObj)) {
                     logger.info('Found resource in module: ' + resourceType + '.' + resourceName);
+                    const actualConfig = Array.isArray(config) ? config[0] : config;
                     resources.push({
                       type: resourceType,
                       name: resourceName,
-                      config: config,
+                      config: actualConfig,
                       file: filePath
                     });
                   }
@@ -316,6 +323,12 @@ export class TerraformParserService {
 
   mergeModuleConfig(resourceConfig, moduleConfig, index) {
     const merged = { ...resourceConfig };
+    
+    for (const [key, value] of Object.entries(moduleConfig)) {
+      if (key !== 'source' && key !== 'count' && key !== 'depends_on') {
+        merged[key] = value;
+      }
+    }
     
     for (const [key, value] of Object.entries(merged)) {
       if (typeof value === 'string' && value.includes('${var.')) {
