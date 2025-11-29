@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import logger from '../config/logger.config.js';
 
 export const validateEstimationRequest = (req, res, next) => {
   const schema = Joi.object({
@@ -10,12 +11,18 @@ export const validateEstimationRequest = (req, res, next) => {
       'eu-west-1', 'eu-west-2', 'eu-central-1',
       'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1',
       'ap-south-1'
+    ).optional(),
+    filePaths: Joi.alternatives().try(
+      Joi.array().items(Joi.string()),
+      Joi.string()
     ).optional()
-  });
+  }).unknown(true);
 
   const { error } = schema.validate(req.body);
   
   if (error) {
+    logger.error('Validation error: ' + error.details[0].message);
+    logger.error('Request body: ' + JSON.stringify(req.body));
     return res.status(400).json({
       success: false,
       error: 'Validation error',
