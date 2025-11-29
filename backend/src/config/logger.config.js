@@ -5,6 +5,7 @@ const logger = winston.createLogger({
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
+    winston.format.splat(), // Add splat format for %s, %d style formatting
     winston.format.json()
   ),
   defaultMeta: { service: 'terraform-cost-estimator' },
@@ -14,7 +15,9 @@ const logger = winston.createLogger({
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
-        winston.format.simple()
+        winston.format.printf(({ level, message, timestamp, service }) => {
+          return `\${timestamp} [\${service}] \${level}: \${message}`;
+        })
       )
     })
   ]
