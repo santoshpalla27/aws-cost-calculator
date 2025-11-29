@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, File, FolderOpen, X } from 'lucide-react';
+import { Upload, File, FolderOpen, X, Folder } from 'lucide-react';
 
 function FileUpload({ onFilesSelected }) {
   const [files, setFiles] = React.useState([]);
@@ -18,6 +18,14 @@ function FileUpload({ onFilesSelected }) {
     }
   });
 
+  const handleFolderSelect = async (event) => {
+    const files = Array.from(event.target.files);
+    if (files.length > 0) {
+      setFiles(prev => [...prev, ...files]);
+      onFilesSelected([...files]);
+    }
+  };
+
   const removeFile = (index) => {
     const newFiles = files.filter((_, i) => i !== index);
     setFiles(newFiles);
@@ -25,44 +33,93 @@ function FileUpload({ onFilesSelected }) {
   };
 
   return (
-    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
-      <div {...getRootProps()} className="text-center cursor-pointer hover:bg-gray-50 transition-colors">
+    <div className="space-y-6">
+      {/* Drag and Drop Area */}
+      <div
+        {...getRootProps()}
+        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+          isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'
+        }`}
+      >
         <input {...getInputProps()} />
-        <Upload className="mx-auto h-12 w-12 text-gray-400" />
-        {isDragActive ? (
-          <p className="mt-2 text-sm text-gray-600">Drop the files here...</p>
-        ) : (
-          <div>
-            <p className="mt-2 text-sm text-gray-600">
-              <span className="font-semibold">Drag & drop</span> Terraform files or folders here
+        <div className="flex flex-col items-center justify-center space-y-4">
+          <Upload className={`w-12 h-12 ${isDragActive ? 'text-blue-500' : 'text-gray-400'}`} />
+          <div className="text-lg text-gray-600">
+          {isDragActive ? (
+            <p>Drop the files here...</p>
+          ) : (
+            <p>
+              <span className="font-semibold text-blue-600">
+                Drag & drop Terraform files here
+              </span>
+              <br />
+              <span className="text-sm text-gray-500">
+                or click to select files (.tf, .tfvars, .zip)
+              </span>
             </p>
-            <p className="text-xs text-gray-500">or click to select files (.tf, .tfvars, .zip)</p>
+          )}
           </div>
-        )}
+        </div>
       </div>
 
+      {/* Folder Upload Button */}
+      <div className="flex justify-center">
+        <input
+          type="file"
+          directory=""
+          webkitdirectory=""
+          onChange={handleFolderSelect}
+          className="hidden"
+          id="folder-upload"
+        />
+        <label
+          htmlFor="folder-upload"
+          className="flex items-center space-x-2 px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer"
+        >
+          <FolderOpen className="w-5 h-5 text-gray-500" />
+          <span>Select Terraform Folder</span>
+        </label>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+        <p className="text-sm text-blue-700 flex items-center">
+          <span className="mr-2">💡</span>
+          <strong>Tip:</strong> Upload your entire Terraform project folder for automatic module detection
+        </p>
+      </div>
+
+      {/* File List */}
       {files.length > 0 && (
-        <div className="mt-4">
-          <h3 className="text-sm font-medium text-gray-900">Uploaded Files:</h3>
-          <div className="mt-2 space-y-2">
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <h3 className="px-4 py-3 bg-gray-50 text-sm font-medium text-gray-700 border-b border-gray-200">
+            Uploaded Files ({files.length}):
+          </h3>
+          <div className="divide-y divide-gray-200 max-h-60 overflow-y-auto">
             {files.map((file, index) => (
-              <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <div className="flex items-center space-x-2">
+              <div key={index} className="flex items-center justify-between px-4 py-3">
+                <div className="flex items-center space-x-3 overflow-hidden">
                   {file.name.endsWith('.zip') ? (
-                    <FolderOpen className="h-4 w-4 text-blue-500" />
+                    <Folder className="w-5 h-5 text-yellow-500 flex-shrink-0" />
                   ) : (
-                    <File className="h-4 w-4 text-green-500" />
+                    <File className="w-5 h-5 text-gray-400 flex-shrink-0" />
                   )}
-                  <span className="text-sm">{file.name}</span>
-                  <span className="text-xs text-gray-500">
-                    ({(file.size / 1024).toFixed(2)} KB)
-                  </span>
+                  <div className="truncate">
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {file.webkitRelativePath || file.name}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      ({(file.size / 1024).toFixed(2)} KB)
+                    </p>
+                  </div>
                 </div>
-                <button 
-                  onClick={() => removeFile(index)}
-                  className="text-red-500 hover:text-red-700"
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeFile(index);
+                  }}
+                  className="text-red-500 hover:text-red-700 ml-2 flex-shrink-0"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
             ))}

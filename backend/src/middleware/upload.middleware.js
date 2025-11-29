@@ -22,7 +22,8 @@ const storage = multer.diskStorage({
     }
   },
   filename: (req, file, cb) => {
-    cb(null, file.originalname);
+    const relativePath = file.originalname;
+    cb(null, relativePath);
   }
 });
 
@@ -33,7 +34,7 @@ const fileFilter = (req, file, cb) => {
   if (allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type ${ext} is not allowed`), false);
+    cb(new Error('File type ' + ext + ' is not allowed'), false);
   }
 };
 
@@ -41,7 +42,8 @@ export const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: config.maxFileSize
+    fileSize: config.maxFileSize,
+    files: 1000
   }
 });
 
@@ -54,40 +56,33 @@ export const processUpload = async (req, res, next) => {
       });
     }
 
-    logger.info(`Processing ${req.files.length} uploaded files`);
-    logger.info(`Upload path: ${req.uploadPath}`);
+    logger.info('Processing ' + req.files.length + ' uploaded files');
+    logger.info('Upload path: ' + req.uploadPath);
 
-    // List all uploaded files
-    for (const file of req.files) {
-      logger.info(`Uploaded file: ${file.originalname} (${file.size} bytes)`);
-    }
-
-    // Check if uploaded file is a zip
     const zipFile = req.files.find(f => f.originalname.toLowerCase().endsWith('.zip'));
 
     if (zipFile) {
-      logger.info(`Found zip file: ${zipFile.originalname}`);
+      logger.info('Found zip file: ' + zipFile.originalname);
       await extractZip(zipFile.path, req.uploadPath);
-      await fs.unlink(zipFile.path); // Remove zip after extraction
+      await fs.unlink(zipFile.path);
       logger.info('Zip file extracted and removed');
+    } else {
+      await preserveDirectoryStructure(req.files, req.uploadPath);
     }
 
-    // List contents after extraction
     const contents = await fs.readdir(req.uploadPath);
-    logger.info(`Directory contents after extraction: ${JSON.stringify(contents)}`);
+    logger.info('Directory contents after extraction: ' + JSON.stringify(contents));
 
-    // Validate that we have at least one .tf file
     const hasTerraformFiles = await checkForTerraformFiles(req.uploadPath);
 
     if (!hasTerraformFiles) {
-      // List all files found for debugging
       const allFiles = await getAllFiles(req.uploadPath);
-      logger.error(`No .tf files found. All files: ${JSON.stringify(allFiles)}`);
+      logger.error('No .tf files found. All files: ' + JSON.stringify(allFiles));
 
       return res.status(400).json({
         success: false,
         error: 'No Terraform files (.tf) found in upload',
-        details: `Found ${allFiles.length} files but none were .tf files`
+        details: 'Found ' + allFiles.length + ' files but none were .tf files'
       });
     }
 
@@ -103,17 +98,35 @@ export const processUpload = async (req, res, next) => {
   }
 };
 
+async function preserveDirectoryStructure(files, uploadPath) {
+  logger.info('Preserving directory structure for ' + files.length + ' files');
+  
+  for (const file of files) {
+    const relativePath = file.originalname;
+    const targetPath = path.join(uploadPath, relativePath);
+    const targetDir = path.dirname(targetPath);
+    
+    await fs.mkdir(targetDir, { recursive: true });
+    
+    try {
+      await fs.rename(file.path, targetPath);
+      logger.info('Moved file to: ' + relativePath);
+    } catch (error) {
+      logger.warn('Could not move file ' + file.originalname + ': ' + error.message);
+    }
+  }
+}
+
 async function extractZip(zipPath, destPath) {
-  logger.info(`Extracting zip: ${zipPath} to ${destPath}`);
+  logger.info('Extracting zip: ' + zipPath + ' to ' + destPath);
 
   return new Promise((resolve, reject) => {
     createReadStream(zipPath)
       .pipe(unzipper.Parse())
       .on('entry', async (entry) => {
         const fileName = entry.path;
-        const type = entry.type; // 'Directory' or 'File'
+        const type = entry.type;
 
-        // Skip __MACOSX and other hidden directories
         if (fileName.includes('__MACOSX') || fileName.startsWith('.')) {
           entry.autodrain();
           return;
@@ -125,7 +138,6 @@ async function extractZip(zipPath, destPath) {
           await fs.mkdir(fullPath, { recursive: true });
           entry.autodrain();
         } else {
-          // Ensure directory exists
           await fs.mkdir(path.dirname(fullPath), { recursive: true });
           entry.pipe(createWriteStream(fullPath));
         }
@@ -142,7 +154,7 @@ async function extractZip(zipPath, destPath) {
 }
 
 async function checkForTerraformFiles(dirPath) {
-  logger.info(`Checking for Terraform files in: ${dirPath}`);
+  logger.info('Checking for Terraform files in: ' + dirPath);
 
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -151,9 +163,9 @@ async function checkForTerraformFiles(dirPath) {
       const fullPath = path.join(dirPath, entry.name);
 
       if (entry.isFile()) {
-        logger.info(`Found file: ${entry.name}`);
+        logger.info('Found file: ' + entry.name);
         if (entry.name.endsWith('.tf') || entry.name.endsWith('.tfvars')) {
-          logger.info(`Found Terraform file: ${entry.name}`);
+          logger.info('Found Terraform file: ' + entry.name);
           return true;
         }
       } else if (entry.isDirectory()) {
@@ -162,13 +174,12 @@ async function checkForTerraformFiles(dirPath) {
       }
     }
   } catch (error) {
-    logger.error(`Error checking directory ${dirPath}:`, error);
+    logger.error('Error checking directory ' + dirPath + ':', error);
   }
 
   return false;
 }
 
-// Helper function to get all files recursively
 async function getAllFiles(dirPath, fileList = []) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
