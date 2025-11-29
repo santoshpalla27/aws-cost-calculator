@@ -14,6 +14,11 @@ export const estimateCost = async (files, credentials) => {
   
   files.forEach(file => {
     formData.append('files', file);
+    if (file.webkitRelativePath) {
+      formData.append('filePaths', file.webkitRelativePath);
+    } else {
+      formData.append('filePaths', file.name);
+    }
   });
   
   formData.append('aws_access_key_id', credentials.aws_access_key_id);
@@ -40,6 +45,11 @@ export const validateTerraform = async (files) => {
   
   files.forEach(file => {
     formData.append('files', file);
+    if (file.webkitRelativePath) {
+      formData.append('filePaths', file.webkitRelativePath);
+    } else {
+      formData.append('filePaths', file.name);
+    }
   });
 
   try {

@@ -46,6 +46,9 @@ export const processUpload = async (req, res, next) => {
     logger.info('Processing ' + req.files.length + ' uploaded files');
     logger.info('Upload path: ' + uploadPath);
 
+    const filePaths = req.body.filePaths || [];
+    logger.info('Received file paths: ' + JSON.stringify(filePaths));
+
     const zipFile = req.files.find(f => f.originalname.toLowerCase().endsWith('.zip'));
 
     if (zipFile) {
@@ -56,15 +59,24 @@ export const processUpload = async (req, res, next) => {
       await fs.unlink(zipPath);
       logger.info('Zip file extracted and removed');
     } else {
-      for (const file of req.files) {
-        const relativePath = file.originalname;
+      for (let i = 0; i < req.files.length; i++) {
+        const file = req.files[i];
+        let relativePath = filePaths[i] || file.originalname;
+        
+        if (relativePath.includes('/') || relativePath.includes('\\')) {
+          const parts = relativePath.split(/[\/\\]/);
+          if (parts.length > 1 && parts[0] === 'terraform') {
+            relativePath = parts.slice(1).join(path.sep);
+          }
+        }
+        
         const filePath = path.join(uploadPath, relativePath);
         const fileDir = path.dirname(filePath);
         
         await fs.mkdir(fileDir, { recursive: true });
         await fs.writeFile(filePath, file.buffer);
         
-        logger.info('Saved file: ' + relativePath);
+        logger.info('Saved file: ' + relativePath + ' to ' + filePath);
       }
     }
 
