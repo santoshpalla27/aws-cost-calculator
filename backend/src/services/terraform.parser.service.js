@@ -66,7 +66,7 @@ export class TerraformParserService {
         
         if (entry.isDirectory()) {
           await this.parseDirectoryRecursive(fullPath);
-        } else if (entry.isFile() &amp;&amp; (entry.name.endsWith('.tf') || entry.name.endsWith('.tfvars'))) {
+        } else if (entry.isFile() && (entry.name.endsWith('.tf') || entry.name.endsWith('.tfvars'))) {
           await this.parseFile(fullPath);
         }
       }
