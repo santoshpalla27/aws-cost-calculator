@@ -1,10 +1,10 @@
+import { initializePricingServices, pricingRegistry } from './pricing/index.js';
 import logger from '../config/logger.config.js';
 
 export class CostCalculatorService {
-  constructor(pricingService, metadataService, mockerService) {
-    this.pricingService = pricingService;
-    this.metadataService = metadataService;
-    this.mockerService = mockerService;
+  constructor(awsClientFactory) {
+    this.awsClientFactory = awsClientFactory;
+    this.registry = initializePricingServices(awsClientFactory);
     this.launchTemplates = new Map();
   }
 
@@ -12,320 +12,225 @@ export class CostCalculatorService {
     const costBreakdown = {
       resources: [],
       summary: { hourly: 0, daily: 0, monthly: 0, yearly: 0 },
+      byService: {},
+      byCategory: {},
       region,
       currency: 'USD',
       timestamp: new Date().toISOString(),
-      mockingReport: null,
+      unsupportedResources: [],
       errors: []
     };
 
+    // Pre-process launch templates
     for (const resource of resources) {
       if (resource.type === 'aws_launch_template') {
         this.launchTemplates.set(resource.name, resource.config);
-        logger.info('Registered launch template: ' + resource.name + ' with instance_type: ' + resource.config.instance_type);
       }
     }
 
-    logger.info('Found ' + this.launchTemplates.size + ' launch templates');
-
-    const processedResources = [];
+    // Resolve launch template references for ASGs
     for (const resource of resources) {
-      const mockedResult = this.mockerService.mockResourceConfig(resource);
-      processedResources.push({
-        ...resource,
-        config: mockedResult.config,
-        mocked: mockedResult.mocked
-      });
+      if (resource.type === 'aws_autoscaling_group') {
+        this.resolveASGLaunchTemplate(resource);
+      }
     }
 
-    logger.info('Starting cost calculation for ' + processedResources.length + ' resources...');
+    logger.info(`Calculating costs for ${resources.length} resources...`);
 
-    for (const resource of processedResources) {
+    for (const resource of resources) {
       try {
-        logger.info('Calculating cost for ' + resource.type + '.' + resource.name + '...');
-        const cost = await this.calculateResourceCost(resource, region);
+        if (!this.registry.isSupported(resource.type)) {
+          costBreakdown.unsupportedResources.push({
+            type: resource.type,
+            name: resource.name
+          });
+          continue;
+        }
 
-        if (cost) {
-          logger.info('Cost calculated for ' + resource.name + ': $' + cost.hourly + '/hour ($' + (cost.hourly * 730).toFixed(2) + '/month)');
-          costBreakdown.resources.push({
+        const cost = await this.registry.calculateCost(resource, region);
+
+        if (cost && cost.hourly > 0) {
+          const resourceCost = {
             type: resource.type,
             name: resource.name,
             module: resource.module,
-            ...cost,
-            mockedAttributes: resource.mocked?.attributes || []
-          });
-          costBreakdown.summary.hourly += cost.hourly || 0;
-        } else {
-          logger.debug('No cost for ' + resource.type + '.' + resource.name + ' (free resource)');
+            ...cost
+          };
+
+          costBreakdown.resources.push(resourceCost);
+          costBreakdown.summary.hourly += cost.hourly;
+
+          // Group by service
+          const service = this.getServiceFromResourceType(resource.type);
+          if (!costBreakdown.byService[service]) {
+            costBreakdown.byService[service] = { hourly: 0, resources: 0 };
+          }
+          costBreakdown.byService[service].hourly += cost.hourly;
+          costBreakdown.byService[service].resources += 1;
+
+          // Group by category
+          const category = this.getCategoryFromResourceType(resource.type);
+          if (!costBreakdown.byCategory[category]) {
+            costBreakdown.byCategory[category] = { hourly: 0, resources: 0 };
+          }
+          costBreakdown.byCategory[category].hourly += cost.hourly;
+          costBreakdown.byCategory[category].resources += 1;
+
+          logger.info(`Cost for ${resource.type}.${resource.name}: $${cost.hourly.toFixed(4)}/hr ($${(cost.hourly * 730).toFixed(2)}/month)`);
         }
       } catch (error) {
-        logger.error('Error calculating cost for ' + resource.type + '.' + resource.name + ':', error.message);
+        logger.error(`Error calculating cost for ${resource.type}.${resource.name}:`, error);
         costBreakdown.errors.push({
-          resource: resource.type + '.' + resource.name,
+          resource: `${resource.type}.${resource.name}`,
           error: error.message
         });
       }
     }
 
+    // Calculate summary totals
     costBreakdown.summary.daily = costBreakdown.summary.hourly * 24;
     costBreakdown.summary.monthly = costBreakdown.summary.hourly * 730;
     costBreakdown.summary.yearly = costBreakdown.summary.hourly * 8760;
 
-    costBreakdown.mockingReport = this.mockerService.generateMockingReport(processedResources);
+    // Convert by-service and by-category hourly to monthly
+    for (const service of Object.keys(costBreakdown.byService)) {
+      costBreakdown.byService[service].monthly = costBreakdown.byService[service].hourly * 730;
+    }
+    for (const category of Object.keys(costBreakdown.byCategory)) {
+      costBreakdown.byCategory[category].monthly = costBreakdown.byCategory[category].hourly * 730;
+    }
 
-    logger.info('Total cost calculated: $' + costBreakdown.summary.hourly.toFixed(4) + '/hour ($' + costBreakdown.summary.monthly.toFixed(2) + '/month)');
+    logger.info(`Total cost: $${costBreakdown.summary.hourly.toFixed(4)}/hr ($${costBreakdown.summary.monthly.toFixed(2)}/month)`);
+    logger.info(`Unsupported resources: ${costBreakdown.unsupportedResources.length}`);
+
     return costBreakdown;
   }
 
-  async calculateResourceCost(resource, region) {
-    switch (resource.type) {
-      case 'aws_instance':
-        return await this.calculateEC2Cost(resource, region);
-      case 'aws_db_instance':
-        return await this.calculateRDSCost(resource, region);
-      case 'aws_ebs_volume':
-        return await this.calculateEBSCost(resource, region);
-      case 'aws_elasticache_cluster':
-      case 'aws_elasticache_replication_group':
-        return await this.calculateElastiCacheCost(resource, region);
-      case 'aws_lb':
-      case 'aws_alb':
-        return await this.calculateLoadBalancerCost(resource, region);
-      case 'aws_nat_gateway':
-        return await this.calculateNATGatewayCost(resource, region);
-      case 'aws_cloudwatch_metric_alarm':
-        return await this.calculateCloudWatchAlarmCost(resource, region);
-      case 'aws_launch_template':
-        return null;
-      case 'aws_autoscaling_group':
-        return await this.calculateAutoScalingGroupCost(resource, region);
-      default:
-        return null;
-    }
-  }
-
-  async calculateEC2Cost(resource, region) {
+  resolveASGLaunchTemplate(resource) {
     const config = resource.config;
-    const instanceType = config.instance_type || 't2.micro';
-
-    if (!instanceType) {
-      throw new Error('No instance_type specified');
-    }
-
-    logger.info('Fetching EC2 pricing for ' + instanceType + '...');
-    const pricing = await this.pricingService.getEC2Pricing(instanceType, region, 'Linux');
-    let hourlyCost = pricing.pricePerHour;
-
-    let ebsCost = 0;
-    const volumeSize = config.root_block_device?.volume_size || 8;
-    const volumeType = config.root_block_device?.volume_type || 'gp2';
     
-    logger.info('Fetching EBS pricing for ' + volumeType + '...');
-    const ebsPricing = await this.pricingService.getEBSPricing(volumeType, region);
-    ebsCost = (ebsPricing.pricePerGBMonth * volumeSize) / 730;
-
-    const totalHourly = hourlyCost + ebsCost;
-    logger.info('EC2 ' + instanceType + ': compute=$' + hourlyCost + '/hr, storage=$' + ebsCost + '/hr, total=$' + totalHourly + '/hr');
-
-    return {
-      hourly: totalHourly,
-      breakdown: { compute: hourlyCost, storage: ebsCost },
-      details: { instanceType, volumeSize, volumeType, region }
-    };
-  }
-
-  async calculateRDSCost(resource, region) {
-    const config = resource.config;
-    const pricing = await this.pricingService.getRDSPricing(
-      config.instance_class,
-      config.engine,
-      region,
-      config.multi_az ? 'Multi-AZ' : 'Single-AZ'
-    );
-
-    let instanceCost = pricing.pricePerHour;
-    if (config.multi_az) instanceCost *= 2;
-
-    const allocatedStorage = config.allocated_storage || 20;
-    const storageType = config.storage_type || 'gp2';
-    const storagePricing = await this.pricingService.getEBSPricing(storageType, region);
-    const storageCost = (storagePricing.pricePerGBMonth * allocatedStorage) / 730;
-
-    return {
-      hourly: instanceCost + storageCost,
-      breakdown: { compute: instanceCost, storage: storageCost },
-      details: { instanceClass: config.instance_class, engine: config.engine, allocatedStorage, region }
-    };
-  }
-
-  async calculateEBSCost(resource, region) {
-    const config = resource.config;
-    const volumeType = config.type || 'gp2';
-    const size = config.size || 10;
-    
-    const pricing = await this.pricingService.getEBSPricing(volumeType, region);
-    const hourlyCost = (pricing.pricePerGBMonth * size) / 730;
-    
-    return {
-      hourly: hourlyCost,
-      breakdown: { storage: hourlyCost },
-      details: { volumeType, size, region }
-    };
-  }
-
-  async calculateElastiCacheCost(resource, region) {
-    const config = resource.config;
-    const nodeType = config.node_type || 'cache.t3.micro';
-    const engine = resource.type === 'aws_elasticache_replication_group' ? 'Redis' : 'Memcached';
-    
-    let numNodes = 1;
-    
-    if (resource.type === 'aws_elasticache_replication_group') {
-      // For replication groups with cluster mode
-      const numNodeGroups = config.num_node_groups || 1;
-      const replicasPerGroup = config.replicas_per_node_group || 0;
-      // Total nodes = (primary + replicas) per group * number of groups
-      numNodes = numNodeGroups * (1 + replicasPerGroup);
-      logger.info(`ElastiCache replication group: ${numNodeGroups} node groups × (1 primary + ${replicasPerGroup} replicas) = ${numNodes} total nodes`);
-    } else if (resource.type === 'aws_elasticache_cluster') {
-      numNodes = config.num_cache_nodes || 1;
-    }
-    
-    const pricing = await this.pricingService.getElastiCachePricing(nodeType, engine, region);
-    const hourlyCost = pricing.pricePerHour * numNodes;
-    
-    logger.info(`ElastiCache ${nodeType}: ${numNodes} nodes × $${pricing.pricePerHour}/hr = $${hourlyCost}/hr`);
-    
-    return {
-      hourly: hourlyCost,
-      breakdown: { compute: hourlyCost },
-      details: { nodeType, engine, numNodes, region }
-    };
-  }
-
-  async calculateLoadBalancerCost(resource, region) {
-    const config = resource.config;
-    const lbType = config.load_balancer_type || 'application';
-    const pricing = await this.pricingService.getLoadBalancerPricing(lbType, region);
-
-    const hourlyCost = pricing.pricePerHour;
-
-    return {
-      hourly: hourlyCost,
-      breakdown: { base: pricing.pricePerHour, lcu: 0 },
-      details: {
-        type: lbType,
-        region,
-        note: 'LCU costs depend on usage ($' + pricing.pricePerLCU + '/LCU-hour)'
-      }
-    };
-  }
-
-  async calculateNATGatewayCost(resource, region) {
-    const pricing = await this.pricingService.getNATGatewayPricing(region);
-    const hourlyCost = pricing.pricePerHour;
-
-    logger.info('NAT Gateway: $' + hourlyCost + '/hr (data processing: $' + pricing.dataProcessingPerGB + '/GB)');
-
-    return {
-      hourly: hourlyCost,
-      breakdown: { base: pricing.pricePerHour, data: 0 },
-      details: {
-        region,
-        baseHourly: pricing.pricePerHour,
-        dataProcessingPerGB: pricing.dataProcessingPerGB,
-        note: 'Data processing costs depend on usage ($' + pricing.dataProcessingPerGB + '/GB)'
-      }
-    };
-  }
-
-  async calculateCloudWatchAlarmCost(resource, region) {
-    const pricing = await this.pricingService.getCloudWatchAlarmPricing(region);
-    const hourlyCost = pricing.pricePerAlarmMonth / 730;
-
-    return {
-      hourly: hourlyCost,
-      breakdown: { alarm: hourlyCost },
-      details: { region, monthlyPrice: pricing.pricePerAlarmMonth }
-    };
-  }
-
-  async calculateAutoScalingGroupCost(resource, region) {
-    const config = resource.config;
-    const desiredCapacity = config.desired_capacity || 1;
-
-    let instanceType = null;
-
-    if (config._resolved_launch_template && config._resolved_launch_template.instance_type) {
-      instanceType = config._resolved_launch_template.instance_type;
-      logger.info('ASG ' + resource.name + ': Found instance_type from _resolved_launch_template: ' + instanceType);
-    }
-
-    if (!instanceType && config.launch_template && Array.isArray(config.launch_template)) {
-      const ltRef = config.launch_template[0];
-      const ltIdStr = String(ltRef.id || '');
-      const match = ltIdStr.match(/aws_launch_template\.([^.]+)/);
-
-      if (match) {
-        const ltName = match[1];
-        logger.info('ASG ' + resource.name + ': Looking for launch template: ' + ltName);
-        const template = this.launchTemplates.get(ltName);
-        if (template && template.instance_type) {
-          instanceType = template.instance_type;
-          logger.info('ASG ' + resource.name + ': Found instance_type from launch template map: ' + instanceType);
-        } else {
-          logger.warn('ASG ' + resource.name + ': Launch template ' + ltName + ' not found or missing instance_type');
+    // Check launch_template
+    if (config.launch_template) {
+      const ltRef = Array.isArray(config.launch_template) 
+        ? config.launch_template[0] 
+        : config.launch_template;
+      const ltMatch = String(ltRef.id || '').match(/aws_launch_template\.([^.]+)/);
+      if (ltMatch) {
+        const template = this.launchTemplates.get(ltMatch[1]);
+        if (template) {
+          config._resolved_launch_template = template;
         }
       }
     }
 
-    if (!instanceType) {
-      logger.warn('Could not resolve instance type for ASG ' + resource.name + ', using t2.micro as fallback');
-      instanceType = 't2.micro';
-    }
-
-    logger.info('Calculating ASG cost for ' + desiredCapacity + 'x ' + instanceType);
-    const pricing = await this.pricingService.getEC2Pricing(instanceType, region, 'Linux');
-    
-    const ebsPricing = await this.pricingService.getEBSPricing('gp2', region);
-    const ebsCostPerInstance = (ebsPricing.pricePerGBMonth * 8) / 730;
-    
-    const computeCost = pricing.pricePerHour * desiredCapacity;
-    const storageCost = ebsCostPerInstance * desiredCapacity;
-    const totalHourly = computeCost + storageCost;
-
-    logger.info('ASG ' + resource.name + ': compute=$' + computeCost + '/hr, storage=$' + storageCost + '/hr, total=$' + totalHourly + '/hr');
-
-    return {
-      hourly: totalHourly,
-      breakdown: { 
-        compute: computeCost,
-        storage: storageCost
-      },
-      details: {
-        instanceType,
-        desiredCapacity,
-        minSize: config.min_size,
-        maxSize: config.max_size,
-        region,
-        note: 'Cost for ' + desiredCapacity + ' instances (' + instanceType + ') at desired capacity'
+    // Check mixed_instances_policy
+    if (config.mixed_instances_policy) {
+      const mip = Array.isArray(config.mixed_instances_policy)
+        ? config.mixed_instances_policy[0]
+        : config.mixed_instances_policy;
+      
+      if (mip.launch_template) {
+        const lt = Array.isArray(mip.launch_template) ? mip.launch_template[0] : mip.launch_template;
+        if (lt.launch_template_specification) {
+          const lts = Array.isArray(lt.launch_template_specification)
+            ? lt.launch_template_specification[0]
+            : lt.launch_template_specification;
+          
+          const ltMatch = String(lts.launch_template_id || '').match(/aws_launch_template\.([^.]+)/);
+          if (ltMatch) {
+            const template = this.launchTemplates.get(ltMatch[1]);
+            if (template) {
+              config._resolved_launch_template = template;
+            }
+          }
+        }
       }
+    }
+  }
+
+  getServiceFromResourceType(resourceType) {
+    const serviceMap = {
+      'aws_instance': 'EC2',
+      'aws_autoscaling_group': 'EC2',
+      'aws_launch_template': 'EC2',
+      'aws_ebs_volume': 'EC2',
+      'aws_lambda_function': 'Lambda',
+      'aws_ecs_': 'ECS',
+      'aws_eks_': 'EKS',
+      'aws_rds_': 'RDS',
+      'aws_db_': 'RDS',
+      'aws_dynamodb_': 'DynamoDB',
+      'aws_elasticache_': 'ElastiCache',
+      'aws_s3_': 'S3',
+      'aws_efs_': 'EFS',
+      'aws_lb': 'ELB',
+      'aws_alb': 'ELB',
+      'aws_nat_gateway': 'VPC',
+      'aws_vpc': 'VPC',
+      'aws_cloudfront_': 'CloudFront',
+      'aws_route53_': 'Route53',
+      'aws_api_gateway': 'APIGateway',
+      'aws_apigateway': 'APIGateway',
+      'aws_sqs_': 'SQS',
+      'aws_sns_': 'SNS',
+      'aws_cloudwatch_': 'CloudWatch',
+      'aws_kms_': 'KMS',
+      'aws_secretsmanager_': 'SecretsManager',
+      'aws_waf': 'WAF',
+      'aws_codebuild_': 'CodeBuild',
+      'aws_codepipeline': 'CodePipeline',
+      'aws_sfn_': 'StepFunctions'
     };
+
+    for (const [prefix, service] of Object.entries(serviceMap)) {
+      if (resourceType.startsWith(prefix)) {
+        return service;
+      }
+    }
+    return 'Other';
+  }
+
+  getCategoryFromResourceType(resourceType) {
+    const categoryMap = {
+      'Compute': ['aws_instance', 'aws_autoscaling_', 'aws_launch_', 'aws_lambda_', 'aws_ecs_', 'aws_eks_'],
+      'Storage': ['aws_s3_', 'aws_ebs_', 'aws_efs_'],
+      'Database': ['aws_db_', 'aws_rds_', 'aws_dynamodb_', 'aws_elasticache_'],
+      'Networking': ['aws_vpc', 'aws_subnet', 'aws_nat_', 'aws_lb', 'aws_alb', 'aws_nlb', 'aws_cloudfront_', 'aws_route53_', 'aws_api_gateway'],
+      'Security': ['aws_waf', 'aws_shield_', 'aws_kms_', 'aws_secretsmanager_', 'aws_ssm_'],
+      'Messaging': ['aws_sqs_', 'aws_sns_', 'aws_msk_', 'aws_cloudwatch_event'],
+      'Monitoring': ['aws_cloudwatch_', 'aws_cloudtrail', 'aws_xray_'],
+      'DevOps': ['aws_codepipeline', 'aws_codebuild_', 'aws_codedeploy_', 'aws_sfn_']
+    };
+
+    for (const [category, prefixes] of Object.entries(categoryMap)) {
+      for (const prefix of prefixes) {
+        if (resourceType.startsWith(prefix)) {
+          return category;
+        }
+      }
+    }
+    return 'Other';
   }
 
   formatCostSummary(costBreakdown) {
     return {
       summary: {
-        hourly: '$' + costBreakdown.summary.hourly.toFixed(4),
-        daily: '$' + costBreakdown.summary.daily.toFixed(2),
-        monthly: '$' + costBreakdown.summary.monthly.toFixed(2),
-        yearly: '$' + costBreakdown.summary.yearly.toFixed(2)
+        hourly: `$${costBreakdown.summary.hourly.toFixed(4)}`,
+        daily: `$${costBreakdown.summary.daily.toFixed(2)}`,
+        monthly: `$${costBreakdown.summary.monthly.toFixed(2)}`,
+        yearly: `$${costBreakdown.summary.yearly.toFixed(2)}`
       },
+      byService: Object.fromEntries(
+        Object.entries(costBreakdown.byService).map(([k, v]) => [k, `$${v.monthly.toFixed(2)}/month`])
+      ),
+      byCategory: Object.fromEntries(
+        Object.entries(costBreakdown.byCategory).map(([k, v]) => [k, `$${v.monthly.toFixed(2)}/month`])
+      ),
       resourceCount: costBreakdown.resources.length,
+      unsupportedCount: costBreakdown.unsupportedResources.length,
       region: costBreakdown.region,
       currency: costBreakdown.currency,
-      timestamp: costBreakdown.timestamp,
-      errors: costBreakdown.errors || []
+      timestamp: costBreakdown.timestamp
     };
   }
 }
