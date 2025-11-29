@@ -88,16 +88,16 @@ export class CostCalculatorService {
       // Check if this is a module resource
       if (resource.module) {
         // Find the module definition
-        const moduleConfig = resources.find(r =& gt;
-        r.type === 'module' & amp;& amp; r.name === resource.module
+        const moduleConfig = resources.find(r =>
+        r.type === 'module' && r.name === resource.module
         );
 
-        if (moduleConfig & amp;& amp; moduleConfig.config & amp;& amp; moduleConfig.config.count) {
+        if (moduleConfig && moduleConfig.config && moduleConfig.config.count) {
           const count = moduleConfig.config.count;
           logger.info(`Expanding module \${resource.module} with count=\${count}`);
 
           // Create count instances
-          for (let i = 0; i & lt; count; i++) {
+          for (let i = 0; i < count; i++) {
             expanded.push({
               ...resource,
               name: `\${resource.name}[\${i}]`,
@@ -248,7 +248,7 @@ export class CostCalculatorService {
     // Resolve launch template
     let instanceType = null;
 
-    if (config.launch_template & amp;& amp; Array.isArray(config.launch_template)) {
+    if (config.launch_template && Array.isArray(config.launch_template)) {
       const ltRef = config.launch_template[0];
       const ltIdStr = String(ltRef.id || '');
       const match = ltIdStr.match(/aws_launch_template\.([^.]+)/);
