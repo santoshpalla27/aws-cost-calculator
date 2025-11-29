@@ -23,16 +23,15 @@ export class CostCalculatorService {
     for (const resource of resources) {
       if (resource.type === 'aws_launch_template') {
         this.launchTemplates.set(resource.name, resource.config);
+        logger.info(`Registered launch template: \${resource.name} with instance_type: \${resource.config.instance_type}`);
       }
     }
 
-    // Expand modules with count
-    const expandedResources = this.expandModuleResources(resources);
-    logger.info(`Expanded \${resources.length} resources to \${expandedResources.length} with module count expansion`);
+    logger.info(`Found \${this.launchTemplates.size} launch templates`);
 
     // Mock only cost-critical missing values
     const processedResources = [];
-    for (const resource of expandedResources) {
+    for (const resource of resources) {
       const mockedResult = this.mockerService.mockResourceConfig(resource);
       processedResources.push({
         ...resource,
@@ -50,7 +49,7 @@ export class CostCalculatorService {
         const cost = await this.calculateResourceCost(resource, region);
 
         if (cost) {
-          logger.info(`Cost calculated for \${resource.name}: \$\${cost.hourly}/hour`);
+          logger.info(`Cost calculated for \${resource.name}: \$\${cost.hourly}/hour (\$\${(cost.hourly * 730).toFixed(2)}/month)`);
           costBreakdown.resources.push({
             type: resource.type,
             name: resource.name,
@@ -72,48 +71,13 @@ export class CostCalculatorService {
     }
 
     costBreakdown.summary.daily = costBreakdown.summary.hourly * 24;
-    costBreakdown.summary.monthly = costBreakdown.summary.daily * 30;
-    costBreakdown.summary.yearly = costBreakdown.summary.daily * 365;
+    costBreakdown.summary.monthly = costBreakdown.summary.hourly * 730;
+    costBreakdown.summary.yearly = costBreakdown.summary.hourly * 8760;
 
     costBreakdown.mockingReport = this.mockerService.generateMockingReport(processedResources);
 
-    logger.info(`Total cost calculated: \$\${costBreakdown.summary.hourly.toFixed(4)}/hour`);
+    logger.info(`Total cost calculated: \$\${costBreakdown.summary.hourly.toFixed(4)}/hour (\$\${costBreakdown.summary.monthly.toFixed(2)}/month)`);
     return costBreakdown;
-  }
-
-  expandModuleResources(resources) {
-    const expanded = [];
-
-    for (const resource of resources) {
-      // Check if this is a module resource
-      if (resource.module) {
-        // Find the module definition
-        const moduleConfig = resources.find(r =>
-        r.type === 'module' && r.name === resource.module
-        );
-
-        if (moduleConfig && moduleConfig.config && moduleConfig.config.count) {
-          const count = moduleConfig.config.count;
-          logger.info(`Expanding module \${resource.module} with count=\${count}`);
-
-          // Create count instances
-          for (let i = 0; i < count; i++) {
-            expanded.push({
-              ...resource,
-              name: `\${resource.name}[\${i}]`,
-              module: `\${resource.module}[\${i}]`,
-              config: { ...resource.config }
-            });
-          }
-        } else {
-          expanded.push(resource);
-        }
-      } else {
-        expanded.push(resource);
-      }
-    }
-
-    return expanded;
   }
 
   async calculateResourceCost(resource, region) {
@@ -145,12 +109,13 @@ export class CostCalculatorService {
 
   async calculateEC2Cost(resource, region) {
     const config = resource.config;
-    const instanceType = config.instance_type || config.ami ? 't2.micro' : null;
+    const instanceType = config.instance_type || 't2.micro';
 
     if (!instanceType) {
       throw new Error('No instance_type specified');
     }
 
+    logger.info(`Fetching EC2 pricing for \${instanceType}...`);
     const pricing = await this.pricingService.getEC2Pricing(instanceType, region, 'Linux');
     let hourlyCost = pricing.pricePerHour;
 
@@ -158,11 +123,16 @@ export class CostCalculatorService {
     let ebsCost = 0;
     const volumeSize = config.root_block_device?.volume_size || 8;
     const volumeType = config.root_block_device?.volume_type || 'gp2';
+    
+    logger.info(`Fetching EBS pricing for \${volumeType}...`);
     const ebsPricing = await this.pricingService.getEBSPricing(volumeType, region);
     ebsCost = (ebsPricing.pricePerGBMonth * volumeSize) / 730;
 
+    const totalHourly = hourlyCost + ebsCost;
+    logger.info(`EC2 \${instanceType}: compute=\$\${hourlyCost}/hr, storage=\$\${ebsCost}/hr, total=\$\${totalHourly}/hr`);
+
     return {
-      hourly: hourlyCost + ebsCost,
+      hourly: totalHourly,
       breakdown: { compute: hourlyCost, storage: ebsCost },
       details: { instanceType, volumeSize, volumeType, region }
     };
@@ -192,12 +162,43 @@ export class CostCalculatorService {
     };
   }
 
+  async calculateEBSCost(resource, region) {
+    const config = resource.config;
+    const volumeType = config.type || 'gp2';
+    const size = config.size || 10;
+    
+    const pricing = await this.pricingService.getEBSPricing(volumeType, region);
+    const hourlyCost = (pricing.pricePerGBMonth * size) / 730;
+    
+    return {
+      hourly: hourlyCost,
+      breakdown: { storage: hourlyCost },
+      details: { volumeType, size, region }
+    };
+  }
+
+  async calculateElastiCacheCost(resource, region) {
+    const config = resource.config;
+    const nodeType = config.node_type || 'cache.t3.micro';
+    const engine = resource.type === 'aws_elasticache_replication_group' ? 'Redis' : 'Memcached';
+    const numNodes = config.num_cache_nodes || config.number_cache_clusters || 1;
+    
+    const pricing = await this.pricingService.getElastiCachePricing(nodeType, engine, region);
+    const hourlyCost = pricing.pricePerHour * numNodes;
+    
+    return {
+      hourly: hourlyCost,
+      breakdown: { compute: hourlyCost },
+      details: { nodeType, engine, numNodes, region }
+    };
+  }
+
   async calculateLoadBalancerCost(resource, region) {
     const config = resource.config;
     const lbType = config.load_balancer_type || 'application';
     const pricing = await this.pricingService.getLoadBalancerPricing(lbType, region);
 
-    // Don't add LCU cost to hourly, it's usage-based
+    // Only hourly cost, LCU is usage-based
     const hourlyCost = pricing.pricePerHour;
 
     return {
@@ -206,7 +207,7 @@ export class CostCalculatorService {
       details: {
         type: lbType,
         region,
-        note: 'LCU costs depend on usage (\$5.84 per LCU-hour)'
+        note: `LCU costs depend on usage (\$\${pricing.pricePerLCU}/LCU-hour)`
       }
     };
   }
@@ -218,6 +219,8 @@ export class CostCalculatorService {
     // Data processing is usage-based and should NOT be included in base cost
     const hourlyCost = pricing.pricePerHour;
 
+    logger.info(`NAT Gateway: \$\${hourlyCost}/hr (data processing: \$\${pricing.dataProcessingPerGB}/GB)`);
+
     return {
       hourly: hourlyCost,
       breakdown: { base: pricing.pricePerHour, data: 0 },
@@ -225,7 +228,7 @@ export class CostCalculatorService {
         region,
         baseHourly: pricing.pricePerHour,
         dataProcessingPerGB: pricing.dataProcessingPerGB,
-        note: 'Data processing costs depend on usage (\$0.045 per GB)'
+        note: `Data processing costs depend on usage (\$\${pricing.dataProcessingPerGB}/GB)`
       }
     };
   }
@@ -248,39 +251,63 @@ export class CostCalculatorService {
     // Resolve launch template
     let instanceType = null;
 
-    if (config.launch_template && Array.isArray(config.launch_template)) {
+    // Method 1: Check _resolved_launch_template
+    if (config._resolved_launch_template && config._resolved_launch_template.instance_type) {
+      instanceType = config._resolved_launch_template.instance_type;
+      logger.info(`ASG \${resource.name}: Found instance_type from _resolved_launch_template: \${instanceType}`);
+    }
+
+    // Method 2: Parse launch_template reference
+    if (!instanceType && config.launch_template && Array.isArray(config.launch_template)) {
       const ltRef = config.launch_template[0];
       const ltIdStr = String(ltRef.id || '');
       const match = ltIdStr.match(/aws_launch_template\.([^.]+)/);
 
       if (match) {
         const ltName = match[1];
+        logger.info(`ASG \${resource.name}: Looking for launch template: \${ltName}`);
         const template = this.launchTemplates.get(ltName);
-        if (template) {
+        if (template && template.instance_type) {
           instanceType = template.instance_type;
-          logger.info(`Resolved launch template \${ltName}: instance_type = \${instanceType}`);
+          logger.info(`ASG \${resource.name}: Found instance_type from launch template map: \${instanceType}`);
+        } else {
+          logger.warn(`ASG \${resource.name}: Launch template \${ltName} not found or missing instance_type`);
         }
       }
     }
 
+    // Fallback
     if (!instanceType) {
-      logger.warn(`Could not resolve launch template for ASG \${resource.name}`);
-      return null;
+      logger.warn(`Could not resolve instance type for ASG \${resource.name}, using t2.micro as fallback`);
+      instanceType = 't2.micro';
     }
 
+    logger.info(`Calculating ASG cost for \${desiredCapacity}x \${instanceType}`);
     const pricing = await this.pricingService.getEC2Pricing(instanceType, region, 'Linux');
-    const hourlyCost = pricing.pricePerHour * desiredCapacity;
+    
+    // Include EBS costs (default 8GB gp2 per instance)
+    const ebsPricing = await this.pricingService.getEBSPricing('gp2', region);
+    const ebsCostPerInstance = (ebsPricing.pricePerGBMonth * 8) / 730;
+    
+    const computeCost = pricing.pricePerHour * desiredCapacity;
+    const storageCost = ebsCostPerInstance * desiredCapacity;
+    const totalHourly = computeCost + storageCost;
+
+    logger.info(`ASG \${resource.name}: compute=\$\${computeCost}/hr, storage=\$\${storageCost}/hr, total=\$\${totalHourly}/hr`);
 
     return {
-      hourly: hourlyCost,
-      breakdown: { compute: hourlyCost },
+      hourly: totalHourly,
+      breakdown: { 
+        compute: computeCost,
+        storage: storageCost
+      },
       details: {
         instanceType,
         desiredCapacity,
         minSize: config.min_size,
         maxSize: config.max_size,
         region,
-        note: `Cost for \${desiredCapacity} instances at desired capacity`
+        note: `Cost for \${desiredCapacity} instances (\${instanceType}) at desired capacity`
       }
     };
   }
