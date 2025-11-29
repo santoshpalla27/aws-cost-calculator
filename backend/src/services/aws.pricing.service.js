@@ -1,3 +1,4 @@
+
 import { 
   GetProductsCommand,
   PricingClient 
@@ -12,7 +13,7 @@ export class AWSPricingService {
   }
 
   async getEC2Pricing(instanceType, region, operatingSystem = 'Linux', tenancy = 'Shared') {
-    const cacheKey = `ec2-${instanceType}-${region}-${operatingSystem}-${tenancy}`;
+    const cacheKey = `ec2-\${instanceType}-\${region}-\${operatingSystem}-\${tenancy}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
@@ -22,49 +23,24 @@ export class AWSPricingService {
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
-        {
-          Type: 'TERM_MATCH',
-          Field: 'instanceType',
-          Value: instanceType
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'location',
-          Value: this.getRegionName(region)
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'operatingSystem',
-          Value: operatingSystem
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'tenancy',
-          Value: tenancy
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'preInstalledSw',
-          Value: 'NA'
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'capacitystatus',
-          Value: 'Used'
-        }
+        { Type: 'TERM_MATCH', Field: 'instanceType', Value: instanceType },
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
+        { Type: 'TERM_MATCH', Field: 'operatingSystem', Value: operatingSystem },
+        { Type: 'TERM_MATCH', Field: 'tenancy', Value: tenancy },
+        { Type: 'TERM_MATCH', Field: 'preInstalledSw', Value: 'NA' },
+        { Type: 'TERM_MATCH', Field: 'capacitystatus', Value: 'Used' }
       ];
 
       const command = new GetProductsCommand({
         ServiceCode: 'AmazonEC2',
         Filters: filters,
-        MaxResults: 100
+        MaxResults: 10
       });
 
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        logger.warn(`No pricing found for ${instanceType} in ${region}`);
-        return this.getDefaultEC2Pricing(instanceType);
+        throw new Error(`No pricing data found for \${instanceType} in \${region}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -85,13 +61,13 @@ export class AWSPricingService {
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching EC2 pricing for ${instanceType}:`, error);
-      return this.getDefaultEC2Pricing(instanceType);
+      logger.error(`Error fetching EC2 pricing for \${instanceType}:`, error);
+      throw new Error(`Unable to fetch pricing for \${instanceType} in \${region}. Please verify the instance type exists.`);
     }
   }
 
   async getRDSPricing(instanceClass, engine, region, deploymentOption = 'Single-AZ') {
-    const cacheKey = `rds-${instanceClass}-${engine}-${region}-${deploymentOption}`;
+    const cacheKey = `rds-\${instanceClass}-\${engine}-\${region}-\${deploymentOption}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
@@ -101,39 +77,22 @@ export class AWSPricingService {
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
-        {
-          Type: 'TERM_MATCH',
-          Field: 'instanceType',
-          Value: instanceClass
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'location',
-          Value: this.getRegionName(region)
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'databaseEngine',
-          Value: this.normalizeDBEngine(engine)
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'deploymentOption',
-          Value: deploymentOption
-        }
+        { Type: 'TERM_MATCH', Field: 'instanceType', Value: instanceClass },
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
+        { Type: 'TERM_MATCH', Field: 'databaseEngine', Value: this.normalizeDBEngine(engine) },
+        { Type: 'TERM_MATCH', Field: 'deploymentOption', Value: deploymentOption }
       ];
 
       const command = new GetProductsCommand({
         ServiceCode: 'AmazonRDS',
         Filters: filters,
-        MaxResults: 100
+        MaxResults: 10
       });
 
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        logger.warn(`No pricing found for RDS ${instanceClass} with ${engine} in ${region}`);
-        return this.getDefaultRDSPricing(instanceClass);
+        throw new Error(`No pricing data found for RDS \${instanceClass} with \${engine} in \${region}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -154,13 +113,13 @@ export class AWSPricingService {
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching RDS pricing for ${instanceClass}:`, error);
-      return this.getDefaultRDSPricing(instanceClass);
+      logger.error(`Error fetching RDS pricing for \${instanceClass}:`, error);
+      throw new Error(`Unable to fetch RDS pricing for \${instanceClass} with \${engine} in \${region}`);
     }
   }
 
   async getEBSPricing(volumeType, region) {
-    const cacheKey = `ebs-${volumeType}-${region}`;
+    const cacheKey = `ebs-\${volumeType}-\${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
@@ -170,28 +129,20 @@ export class AWSPricingService {
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
-        {
-          Type: 'TERM_MATCH',
-          Field: 'volumeApiName',
-          Value: volumeType
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'location',
-          Value: this.getRegionName(region)
-        }
+        { Type: 'TERM_MATCH', Field: 'volumeApiName', Value: volumeType },
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) }
       ];
 
       const command = new GetProductsCommand({
         ServiceCode: 'AmazonEC2',
         Filters: filters,
-        MaxResults: 100
+        MaxResults: 10
       });
 
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        return this.getDefaultEBSPricing(volumeType);
+        throw new Error(`No pricing data found for EBS \${volumeType} in \${region}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -209,13 +160,13 @@ export class AWSPricingService {
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching EBS pricing for ${volumeType}:`, error);
-      return this.getDefaultEBSPricing(volumeType);
+      logger.error(`Error fetching EBS pricing for \${volumeType}:`, error);
+      throw new Error(`Unable to fetch EBS pricing for \${volumeType} in \${region}`);
     }
   }
 
-  async getS3Pricing(storageClass, region) {
-    const cacheKey = `s3-${storageClass}-${region}`;
+  async getNATGatewayPricing(region) {
+    const cacheKey = `nat-gateway-\${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
@@ -225,28 +176,20 @@ export class AWSPricingService {
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
-        {
-          Type: 'TERM_MATCH',
-          Field: 'storageClass',
-          Value: storageClass
-        },
-        {
-          Type: 'TERM_MATCH',
-          Field: 'location',
-          Value: this.getRegionName(region)
-        }
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
+        { Type: 'TERM_MATCH', Field: 'productFamily', Value: 'NAT Gateway' }
       ];
 
       const command = new GetProductsCommand({
-        ServiceCode: 'AmazonS3',
+        ServiceCode: 'AmazonEC2',
         Filters: filters,
-        MaxResults: 100
+        MaxResults: 10
       });
 
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        return this.getDefaultS3Pricing(storageClass);
+        throw new Error(`No NAT Gateway pricing found for \${region}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -254,21 +197,184 @@ export class AWSPricingService {
       const firstTerm = Object.values(onDemandTerms)[0];
       const priceDimensions = Object.values(firstTerm.priceDimensions);
 
-      // S3 has tiered pricing, get first tier
-      const firstTier = priceDimensions.find(pd => pd.beginRange === '0');
-      
+      // Find hourly rate and data processing rate
+      const hourlyDimension = priceDimensions.find(pd => 
+        pd.description && pd.description.toLowerCase().includes('hour')
+      );
+
+      const dataProcessingDimension = priceDimensions.find(pd => 
+        pd.description && pd.description.toLowerCase().includes('data processed')
+      );
+
       const pricing = {
-        storageClass,
         region,
-        pricePerGBMonth: firstTier ? parseFloat(firstTier.pricePerUnit.USD) : 0.023,
+        pricePerHour: hourlyDimension ? parseFloat(hourlyDimension.pricePerUnit.USD) : null,
+        dataProcessingPerGB: dataProcessingDimension ? parseFloat(dataProcessingDimension.pricePerUnit.USD) : null,
+        currency: 'USD'
+      };
+
+      if (!pricing.pricePerHour || !pricing.dataProcessingPerGB) {
+        throw new Error('Invalid NAT Gateway pricing data structure');
+      }
+
+      this.setCache(cacheKey, pricing);
+      return pricing;
+    } catch (error) {
+      logger.error(`Error fetching NAT Gateway pricing:`, error);
+      throw new Error(`Unable to fetch NAT Gateway pricing for \${region}`);
+    }
+  }
+
+  async getLoadBalancerPricing(lbType, region) {
+    const cacheKey = `lb-\${lbType}-\${region}`;
+    
+    if (this.isCacheValid(cacheKey)) {
+      return this.cache.get(cacheKey).data;
+    }
+
+    try {
+      const pricingClient = this.clientFactory.createPricingClient();
+      
+      const productFamily = lbType === 'application' ? 
+        'Load Balancer-Application' : 'Load Balancer-Network';
+      
+      const filters = [
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
+        { Type: 'TERM_MATCH', Field: 'productFamily', Value: productFamily }
+      ];
+
+      const command = new GetProductsCommand({
+        ServiceCode: 'AWSELB',
+        Filters: filters,
+        MaxResults: 10
+      });
+
+      const response = await pricingClient.send(command);
+      
+      if (!response.PriceList || response.PriceList.length === 0) {
+        throw new Error(`No Load Balancer pricing found for \${lbType} in \${region}`);
+      }
+
+      const priceData = JSON.parse(response.PriceList[0]);
+      const onDemandTerms = priceData.terms.OnDemand;
+      const firstTerm = Object.values(onDemandTerms)[0];
+      const priceDimensions = Object.values(firstTerm.priceDimensions);
+
+      const hourlyDimension = priceDimensions.find(pd => pd.unit === 'Hrs');
+      const lcuDimension = priceDimensions.find(pd => pd.unit && pd.unit.includes('LCU'));
+
+      const pricing = {
+        lbType,
+        region,
+        pricePerHour: hourlyDimension ? parseFloat(hourlyDimension.pricePerUnit.USD) : null,
+        pricePerLCU: lcuDimension ? parseFloat(lcuDimension.pricePerUnit.USD) : null,
+        currency: 'USD'
+      };
+
+      if (!pricing.pricePerHour) {
+        throw new Error('Invalid Load Balancer pricing data');
+      }
+
+      this.setCache(cacheKey, pricing);
+      return pricing;
+    } catch (error) {
+      logger.error(`Error fetching Load Balancer pricing:`, error);
+      throw new Error(`Unable to fetch Load Balancer pricing for \${lbType} in \${region}`);
+    }
+  }
+
+  async getCloudWatchAlarmPricing(region) {
+    const cacheKey = `cloudwatch-alarm-\${region}`;
+    
+    if (this.isCacheValid(cacheKey)) {
+      return this.cache.get(cacheKey).data;
+    }
+
+    try {
+      const pricingClient = this.clientFactory.createPricingClient();
+      
+      const filters = [
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
+        { Type: 'TERM_MATCH', Field: 'productFamily', Value: 'Alarm' }
+      ];
+
+      const command = new GetProductsCommand({
+        ServiceCode: 'AmazonCloudWatch',
+        Filters: filters,
+        MaxResults: 10
+      });
+
+      const response = await pricingClient.send(command);
+      
+      if (!response.PriceList || response.PriceList.length === 0) {
+        throw new Error(`No CloudWatch Alarm pricing found for \${region}`);
+      }
+
+      const priceData = JSON.parse(response.PriceList[0]);
+      const onDemandTerms = priceData.terms.OnDemand;
+      const firstTerm = Object.values(onDemandTerms)[0];
+      const priceDimensions = Object.values(firstTerm.priceDimensions)[0];
+
+      const pricing = {
+        region,
+        pricePerAlarmMonth: parseFloat(priceDimensions.pricePerUnit.USD),
         currency: 'USD'
       };
 
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching S3 pricing for ${storageClass}:`, error);
-      return this.getDefaultS3Pricing(storageClass);
+      logger.error(`Error fetching CloudWatch Alarm pricing:`, error);
+      throw new Error(`Unable to fetch CloudWatch Alarm pricing for \${region}`);
+    }
+  }
+
+  async getElastiCachePricing(nodeType, region) {
+    const cacheKey = `elasticache-\${nodeType}-\${region}`;
+    
+    if (this.isCacheValid(cacheKey)) {
+      return this.cache.get(cacheKey).data;
+    }
+
+    try {
+      const pricingClient = this.clientFactory.createPricingClient();
+      
+      const filters = [
+        { Type: 'TERM_MATCH', Field: 'cacheEngine', Value: 'Redis' },
+        { Type: 'TERM_MATCH', Field: 'instanceType', Value: nodeType },
+        { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) }
+      ];
+
+      const command = new GetProductsCommand({
+        ServiceCode: 'AmazonElastiCache',
+        Filters: filters,
+        MaxResults: 10
+      });
+
+      const response = await pricingClient.send(command);
+      
+      if (!response.PriceList || response.PriceList.length === 0) {
+        throw new Error(`No ElastiCache pricing found for \${nodeType} in \${region}`);
+      }
+
+      const priceData = JSON.parse(response.PriceList[0]);
+      const onDemandTerms = priceData.terms.OnDemand;
+      const firstTerm = Object.values(onDemandTerms)[0];
+      const priceDimensions = Object.values(firstTerm.priceDimensions)[0];
+
+      const pricing = {
+        nodeType,
+        region,
+        pricePerHour: parseFloat(priceDimensions.pricePerUnit.USD),
+        unit: priceDimensions.unit,
+        currency: 'USD'
+      };
+
+      this.setCache(cacheKey, pricing);
+      return pricing;
+    } catch (error) {
+      logger.error(`Error fetching ElastiCache pricing for \${nodeType}:`, error);
+      throw new Error(`Unable to fetch ElastiCache pricing for \${nodeType} in \${region}`);
     }
   }
 
@@ -279,114 +385,31 @@ export class AWSPricingService {
       'us-west-1': 'US West (N. California)',
       'us-west-2': 'US West (Oregon)',
       'eu-west-1': 'EU (Ireland)',
+      'eu-west-2': 'EU (London)',
       'eu-central-1': 'EU (Frankfurt)',
       'ap-southeast-1': 'Asia Pacific (Singapore)',
+      'ap-southeast-2': 'Asia Pacific (Sydney)',
       'ap-northeast-1': 'Asia Pacific (Tokyo)',
       'ap-south-1': 'Asia Pacific (Mumbai)'
     };
 
-    return regionMapping[regionCode] || 'US East (N. Virginia)';
+    return regionMapping[regionCode] || regionMapping['us-east-1'];
   }
 
   normalizeDBEngine(engine) {
     const engineMapping = {
       'postgres': 'PostgreSQL',
+      'postgresql': 'PostgreSQL',
       'mysql': 'MySQL',
       'mariadb': 'MariaDB',
       'aurora': 'Aurora MySQL',
       'aurora-mysql': 'Aurora MySQL',
-      'aurora-postgresql': 'Aurora PostgreSQL'
+      'aurora-postgresql': 'Aurora PostgreSQL',
+      'oracle-se2': 'Oracle',
+      'sqlserver-ex': 'SQL Server'
     };
 
     return engineMapping[engine.toLowerCase()] || engine;
-  }
-
-  getDefaultEC2Pricing(instanceType) {
-    // Fallback pricing based on instance size
-    const defaultPrices = {
-      't2.micro': 0.0116,
-      't2.small': 0.023,
-      't2.medium': 0.0464,
-      't3.micro': 0.0104,
-      't3.small': 0.0208,
-      't3.medium': 0.0416,
-      'm5.large': 0.096,
-      'm5.xlarge': 0.192,
-      'm5.2xlarge': 0.384,
-      'c5.large': 0.085,
-      'c5.xlarge': 0.17,
-      'r5.large': 0.126,
-      'r5.xlarge': 0.252
-    };
-
-    return {
-      instanceType,
-      region: 'us-east-1',
-      pricePerHour: defaultPrices[instanceType] || 0.10,
-      unit: 'Hrs',
-      currency: 'USD',
-      isEstimate: true
-    };
-  }
-
-  getDefaultRDSPricing(instanceClass) {
-    const defaultPrices = {
-      'db.t3.micro': 0.017,
-      'db.t3.small': 0.034,
-      'db.t3.medium': 0.068,
-      'db.m5.large': 0.192,
-      'db.m5.xlarge': 0.384,
-      'db.r5.large': 0.24,
-      'db.r5.xlarge': 0.48
-    };
-
-    return {
-      instanceClass,
-      region: 'us-east-1',
-      pricePerHour: defaultPrices[instanceClass] || 0.10,
-      unit: 'Hrs',
-      currency: 'USD',
-      isEstimate: true
-    };
-  }
-
-  getDefaultEBSPricing(volumeType) {
-    const defaultPrices = {
-      'gp2': 0.10,
-      'gp3': 0.08,
-      'io1': 0.125,
-      'io2': 0.125,
-      'st1': 0.045,
-      'sc1': 0.015,
-      'standard': 0.05
-    };
-
-    return {
-      volumeType,
-      region: 'us-east-1',
-      pricePerGBMonth: defaultPrices[volumeType] || 0.10,
-      currency: 'USD',
-      isEstimate: true
-    };
-  }
-
-  getDefaultS3Pricing(storageClass) {
-    const defaultPrices = {
-      'STANDARD': 0.023,
-      'INTELLIGENT_TIERING': 0.023,
-      'STANDARD_IA': 0.0125,
-      'ONEZONE_IA': 0.01,
-      'GLACIER': 0.004,
-      'DEEP_ARCHIVE': 0.00099
-    };
-
-    return {
-      storageClass,
-      region: 'us-east-1',
-      pricePerGBMonth: defaultPrices[storageClass] || 0.023,
-      currency: 'USD',
-      isEstimate: true
-    };
   }
 
   isCacheValid(key) {
@@ -401,5 +424,9 @@ export class AWSPricingService {
       data,
       timestamp: Date.now()
     });
+  }
+
+  clearCache() {
+    this.cache.clear();
   }
 }
