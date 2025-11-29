@@ -84,7 +84,10 @@ export class TerraformParserService {
     try {
       logger.info(`Parsing file: ${filePath}`);
       const content = await fs.readFile(filePath, 'utf-8');
-      
+
+      logger.info(`File content length: ${content.length} bytes`);
+      logger.info(`First 200 chars: ${content.substring(0, 200)}`);
+
       // Attempt to parse
       let parsed;
       try {
@@ -103,17 +106,17 @@ export class TerraformParserService {
         logger.error(`HCL Parse error for ${filePath}:`, parseError);
         return; // Skip file if parsing fails
       }
-      
+
       // Log the raw parsed output for debugging
       logger.info(`Raw parsed content for ${path.basename(filePath)}: ${JSON.stringify(parsed, null, 2)}`);
 
       if (!parsed) return;
-      
+
       // hcl2-parser returns an array of objects. We need to merge them if so, or handle them.
       // Actually, parseToObject typically returns a single object with keys like "resource", "variable", etc.
-      // EXCEPT if the input has duplicates, it might behavior differently. 
+      // EXCEPT if the input has duplicates, it might behavior differently.
       // But typically it returns { resource: { ... }, variable: { ... } }
-      
+
       // If parsed is an array (sometimes it returns [ { resource: ... } ]), we should normalize.
       const parsedObj = Array.isArray(parsed) ? parsed[0] : parsed;
 
