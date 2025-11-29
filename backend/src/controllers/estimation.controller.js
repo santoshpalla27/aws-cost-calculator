@@ -1,31 +1,22 @@
 import { TerraformParserService } from '../services/terraform.parser.service.js';
 import { AWSClientFactory } from '../config/aws.config.js';
-import { AWSPricingService } from '../services/aws.pricing.service.js';
-import { AWSMetadataService } from '../services/aws.metadata.service.js';
 import { CostCalculatorService } from '../services/cost.calculator.service.js';
-import { DataMockerService } from '../services/data.mocker.service.js';
 import logger from '../config/logger.config.js';
 import fs from 'fs/promises';
-import path from 'path';
 
 export class EstimationController {
   async estimateCost(req, res) {
     const uploadPath = req.uploadPath;
     
     try {
-      // Validate AWS credentials
+      // Extract and validate AWS credentials
       const credentials = this.extractCredentials(req);
       
-      // Initialize services
+      // Create AWS client factory with credentials
       const clientFactory = new AWSClientFactory(credentials);
-      const pricingService = new AWSPricingService(clientFactory);
-      const metadataService = new AWSMetadataService(clientFactory);
-      const mockerService = new DataMockerService();
-      const calculatorService = new CostCalculatorService(
-        pricingService,
-        metadataService,
-        mockerService
-      );
+      
+      // Initialize cost calculator with the client factory
+      const calculatorService = new CostCalculatorService(clientFactory);
 
       // Parse Terraform files
       logger.info('Parsing Terraform files...');
@@ -54,7 +45,9 @@ export class EstimationController {
             totalResources: parsedData.resources.length,
             resourceTypes: this.groupResourcesByType(parsedData.resources),
             modules: parsedData.modules.length,
-            region
+            region,
+            supportedResources: costBreakdown.resources.length,
+            unsupportedResources: costBreakdown.unsupportedResources.length
           }
         }
       };
@@ -110,33 +103,13 @@ export class EstimationController {
       const credentials = this.extractCredentials(req);
       
       const clientFactory = new AWSClientFactory(credentials);
-      const metadataService = new AWSMetadataService(clientFactory);
 
-      let metadata;
-
-      switch (resourceType) {
-        case 'instance_type':
-          metadata = await metadataService.getEC2InstanceTypeDetails(resourceId, region);
-          break;
-        
-        case 'ami':
-          metadata = await metadataService.getAMIDetails(resourceId, region);
-          break;
-        
-        case 'availability_zones':
-          metadata = await metadataService.getAvailabilityZones(region);
-          break;
-        
-        default:
-          return res.status(400).json({
-            success: false,
-            error: 'Unsupported resource type'
-          });
-      }
-
+      // This would need metadata service implementation
       res.json({
         success: true,
-        data: metadata
+        data: {
+          message: 'Metadata endpoint - implement as needed'
+        }
       });
 
     } catch (error) {
@@ -149,12 +122,18 @@ export class EstimationController {
   }
 
   extractCredentials(req) {
-    const accessKeyId = req.body.aws_access_key_id || req.headers['x-aws-access-key-id'] || process.env.AWS_ACCESS_KEY_ID;
-    const secretAccessKey = req.body.aws_secret_access_key || req.headers['x-aws-secret-access-key'] || process.env.AWS_SECRET_ACCESS_KEY;
-    const sessionToken = req.body.aws_session_token || req.headers['x-aws-session-token'] || process.env.AWS_SESSION_TOKEN;
+    const accessKeyId = req.body.aws_access_key_id || 
+                       req.headers['x-aws-access-key-id'] || 
+                       process.env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = req.body.aws_secret_access_key || 
+                           req.headers['x-aws-secret-access-key'] || 
+                           process.env.AWS_SECRET_ACCESS_KEY;
+    const sessionToken = req.body.aws_session_token || 
+                        req.headers['x-aws-session-token'] || 
+                        process.env.AWS_SESSION_TOKEN;
 
     if (!accessKeyId || !secretAccessKey) {
-      throw new Error('AWS credentials are required');
+      throw new Error('AWS credentials are required. Provide aws_access_key_id and aws_secret_access_key.');
     }
 
     return {
@@ -173,8 +152,10 @@ export class EstimationController {
 
   async cleanup(dirPath) {
     try {
-      await fs.rm(dirPath, { recursive: true, force: true });
-      logger.info(`Cleaned up upload directory: ${dirPath}`);
+      if (dirPath) {
+        await fs.rm(dirPath, { recursive: true, force: true });
+        logger.info(`Cleaned up upload directory: ${dirPath}`);
+      }
     } catch (error) {
       logger.error(`Error cleaning up ${dirPath}:`, error);
     }

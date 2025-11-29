@@ -1,58 +1,66 @@
 import { pricingRegistry } from './pricing.registry.js';
-import { AWSClientFactory } from '../../config/aws.config.js';
 
-// Compute Services
+// Import all pricing services
 import { EC2PricingService } from './providers/compute/ec2.pricing.js';
 import { LambdaPricingService } from './providers/compute/lambda.pricing.js';
 import { ECSPricingService } from './providers/compute/ecs.pricing.js';
 import { EKSPricingService } from './providers/compute/eks.pricing.js';
 
-// Networking Services
 import { VPCPricingService } from './providers/networking/vpc.pricing.js';
 import { ALBPricingService } from './providers/networking/alb.pricing.js';
 import { CloudFrontPricingService } from './providers/networking/cloudfront.pricing.js';
 import { Route53PricingService } from './providers/networking/route53.pricing.js';
 import { APIGatewayPricingService } from './providers/networking/api-gateway.pricing.js';
 
-// Storage Services
 import { S3PricingService } from './providers/storage/s3.pricing.js';
 import { EFSPricingService } from './providers/storage/efs.pricing.js';
 
-// Database Services
 import { RDSPricingService } from './providers/database/rds.pricing.js';
 import { DynamoDBPricingService } from './providers/database/dynamodb.pricing.js';
 import { ElastiCachePricingService } from './providers/database/elasticache.pricing.js';
 
-// Messaging Services
 import { SQSPricingService } from './providers/messaging/sqs.pricing.js';
 import { SNSPricingService } from './providers/messaging/sns.pricing.js';
 import { EventBridgePricingService } from './providers/messaging/eventbridge.pricing.js';
 import { MSKPricingService } from './providers/messaging/msk.pricing.js';
 
-// Security Services
 import { WAFPricingService } from './providers/security/waf.pricing.js';
 import { ShieldPricingService } from './providers/security/shield.pricing.js';
 import { KMSPricingService } from './providers/security/kms.pricing.js';
 import { SecretsManagerPricingService } from './providers/security/secrets-manager.pricing.js';
 import { SSMPricingService } from './providers/security/ssm.pricing.js';
 
-// Monitoring Services
 import { CloudWatchPricingService } from './providers/monitoring/cloudwatch.pricing.js';
 import { CloudTrailPricingService } from './providers/monitoring/cloudtrail.pricing.js';
 import { XRayPricingService } from './providers/monitoring/xray.pricing.js';
 
-// DevOps Services
 import { CodePipelinePricingService } from './providers/devops/codepipeline.pricing.js';
 import { CodeBuildPricingService } from './providers/devops/codebuild.pricing.js';
 import { StepFunctionsPricingService } from './providers/devops/step-functions.pricing.js';
 
 import logger from '../../config/logger.config.js';
 
+let initialized = false;
+
 /**
  * Initialize all pricing services and register them
+ * @param {AWSClientFactory} awsClientFactory - Factory instance with createPricingClient method
  */
 export function initializePricingServices(awsClientFactory) {
+  // Validate the factory has the required method
+  if (!awsClientFactory || typeof awsClientFactory.createPricingClient !== 'function') {
+    throw new Error('Invalid AWS client factory. Must have createPricingClient method.');
+  }
+
+  // Only initialize once per factory (or reinitialize if needed)
+  if (initialized && pricingRegistry.getAllProviders().length > 0) {
+    logger.debug('Pricing services already initialized, skipping...');
+    return pricingRegistry;
+  }
+
   const pricingClient = awsClientFactory.createPricingClient();
+
+  logger.info('Initializing pricing services...');
 
   // Compute
   pricingRegistry.register(new EC2PricingService(pricingClient));
@@ -98,6 +106,8 @@ export function initializePricingServices(awsClientFactory) {
   pricingRegistry.register(new CodePipelinePricingService(pricingClient));
   pricingRegistry.register(new CodeBuildPricingService(pricingClient));
   pricingRegistry.register(new StepFunctionsPricingService(pricingClient));
+
+  initialized = true;
 
   logger.info(`Initialized ${pricingRegistry.getAllProviders().length} pricing providers`);
   logger.info(`Supporting ${pricingRegistry.getSupportedResourceTypes().length} resource types`);
