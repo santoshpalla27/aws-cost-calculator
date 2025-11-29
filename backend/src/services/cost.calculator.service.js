@@ -46,7 +46,7 @@ export class CostCalculatorService {
         const cost = await this.calculateResourceCost(resource, region);
 
         if (cost) {
-          logger.info('Cost calculated for ' + resource.name + ': \$' + cost.hourly + '/hour (\$' + (cost.hourly * 730).toFixed(2) + '/month)');
+          logger.info('Cost calculated for ' + resource.name + ': $' + cost.hourly + '/hour ($' + (cost.hourly * 730).toFixed(2) + '/month)');
           costBreakdown.resources.push({
             type: resource.type,
             name: resource.name,
@@ -73,7 +73,7 @@ export class CostCalculatorService {
 
     costBreakdown.mockingReport = this.mockerService.generateMockingReport(processedResources);
 
-    logger.info('Total cost calculated: \$' + costBreakdown.summary.hourly.toFixed(4) + '/hour (\$' + costBreakdown.summary.monthly.toFixed(2) + '/month)');
+    logger.info('Total cost calculated: $' + costBreakdown.summary.hourly.toFixed(4) + '/hour ($' + costBreakdown.summary.monthly.toFixed(2) + '/month)');
     return costBreakdown;
   }
 
@@ -125,7 +125,7 @@ export class CostCalculatorService {
     ebsCost = (ebsPricing.pricePerGBMonth * volumeSize) / 730;
 
     const totalHourly = hourlyCost + ebsCost;
-    logger.info('EC2 ' + instanceType + ': compute=\$' + hourlyCost + '/hr, storage=\$' + ebsCost + '/hr, total=\$' + totalHourly + '/hr');
+    logger.info('EC2 ' + instanceType + ': compute=$' + hourlyCost + '/hr, storage=$' + ebsCost + '/hr, total=$' + totalHourly + '/hr');
 
     return {
       hourly: totalHourly,
@@ -177,10 +177,24 @@ export class CostCalculatorService {
     const config = resource.config;
     const nodeType = config.node_type || 'cache.t3.micro';
     const engine = resource.type === 'aws_elasticache_replication_group' ? 'Redis' : 'Memcached';
-    const numNodes = config.num_cache_nodes || config.number_cache_clusters || 1;
+    
+    let numNodes = 1;
+    
+    if (resource.type === 'aws_elasticache_replication_group') {
+      // For replication groups with cluster mode
+      const numNodeGroups = config.num_node_groups || 1;
+      const replicasPerGroup = config.replicas_per_node_group || 0;
+      // Total nodes = (primary + replicas) per group * number of groups
+      numNodes = numNodeGroups * (1 + replicasPerGroup);
+      logger.info(`ElastiCache replication group: ${numNodeGroups} node groups × (1 primary + ${replicasPerGroup} replicas) = ${numNodes} total nodes`);
+    } else if (resource.type === 'aws_elasticache_cluster') {
+      numNodes = config.num_cache_nodes || 1;
+    }
     
     const pricing = await this.pricingService.getElastiCachePricing(nodeType, engine, region);
     const hourlyCost = pricing.pricePerHour * numNodes;
+    
+    logger.info(`ElastiCache ${nodeType}: ${numNodes} nodes × $${pricing.pricePerHour}/hr = $${hourlyCost}/hr`);
     
     return {
       hourly: hourlyCost,
@@ -202,7 +216,7 @@ export class CostCalculatorService {
       details: {
         type: lbType,
         region,
-        note: 'LCU costs depend on usage (\$' + pricing.pricePerLCU + '/LCU-hour)'
+        note: 'LCU costs depend on usage ($' + pricing.pricePerLCU + '/LCU-hour)'
       }
     };
   }
@@ -211,7 +225,7 @@ export class CostCalculatorService {
     const pricing = await this.pricingService.getNATGatewayPricing(region);
     const hourlyCost = pricing.pricePerHour;
 
-    logger.info('NAT Gateway: \$' + hourlyCost + '/hr (data processing: \$' + pricing.dataProcessingPerGB + '/GB)');
+    logger.info('NAT Gateway: $' + hourlyCost + '/hr (data processing: $' + pricing.dataProcessingPerGB + '/GB)');
 
     return {
       hourly: hourlyCost,
@@ -220,7 +234,7 @@ export class CostCalculatorService {
         region,
         baseHourly: pricing.pricePerHour,
         dataProcessingPerGB: pricing.dataProcessingPerGB,
-        note: 'Data processing costs depend on usage (\$' + pricing.dataProcessingPerGB + '/GB)'
+        note: 'Data processing costs depend on usage ($' + pricing.dataProcessingPerGB + '/GB)'
       }
     };
   }
@@ -280,7 +294,7 @@ export class CostCalculatorService {
     const storageCost = ebsCostPerInstance * desiredCapacity;
     const totalHourly = computeCost + storageCost;
 
-    logger.info('ASG ' + resource.name + ': compute=\$' + computeCost + '/hr, storage=\$' + storageCost + '/hr, total=\$' + totalHourly + '/hr');
+    logger.info('ASG ' + resource.name + ': compute=$' + computeCost + '/hr, storage=$' + storageCost + '/hr, total=$' + totalHourly + '/hr');
 
     return {
       hourly: totalHourly,
@@ -302,10 +316,10 @@ export class CostCalculatorService {
   formatCostSummary(costBreakdown) {
     return {
       summary: {
-        hourly: '\$' + costBreakdown.summary.hourly.toFixed(4),
-        daily: '\$' + costBreakdown.summary.daily.toFixed(2),
-        monthly: '\$' + costBreakdown.summary.monthly.toFixed(2),
-        yearly: '\$' + costBreakdown.summary.yearly.toFixed(2)
+        hourly: '$' + costBreakdown.summary.hourly.toFixed(4),
+        daily: '$' + costBreakdown.summary.daily.toFixed(2),
+        monthly: '$' + costBreakdown.summary.monthly.toFixed(2),
+        yearly: '$' + costBreakdown.summary.yearly.toFixed(2)
       },
       resourceCount: costBreakdown.resources.length,
       region: costBreakdown.region,

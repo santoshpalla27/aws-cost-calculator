@@ -5,8 +5,17 @@ export class DataMockerService {
     // Don't mock if we have a real value
     if (currentValue !== undefined && 
         currentValue !== null && 
-        currentValue !== '' &&
-        !this.isUnresolvedReference(currentValue)) {
+        currentValue !== '') {
+      
+      // Check if it's an unresolved variable reference
+      if (typeof currentValue === 'string') {
+        // If it's still a ${var.xxx} reference, it should be mocked
+        if (currentValue.match(/^\$\{var\.[^}]+\}$/)) {
+          return this.isRequiredForCosting(resourceType, attributeName);
+        }
+        // If it looks like a real value, don't mock
+        return false;
+      }
       return false;
     }
 
