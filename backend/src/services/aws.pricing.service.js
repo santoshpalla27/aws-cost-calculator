@@ -1,8 +1,4 @@
-
-import { 
-  GetProductsCommand,
-  PricingClient 
-} from '@aws-sdk/client-pricing';
+import { GetProductsCommand } from '@aws-sdk/client-pricing';
 import logger from '../config/logger.config.js';
 
 export class AWSPricingService {
@@ -13,13 +9,15 @@ export class AWSPricingService {
   }
 
   async getEC2Pricing(instanceType, region, operatingSystem = 'Linux', tenancy = 'Shared') {
-    const cacheKey = `ec2-\${instanceType}-\${region}-\${operatingSystem}-\${tenancy}`;
+    const cacheKey = `ec2-${instanceType}-${region}-${operatingSystem}-${tenancy}`;
     
     if (this.isCacheValid(cacheKey)) {
+      logger.info(`Cache hit for EC2: ${instanceType}`);
       return this.cache.get(cacheKey).data;
     }
 
     try {
+      logger.info(`Fetching EC2 pricing for ${instanceType} in ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
@@ -40,7 +38,7 @@ export class AWSPricingService {
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No pricing data found for \${instanceType} in \${region}`);
+        throw new Error(`No pricing data found for ${instanceType} in ${region}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -58,22 +56,25 @@ export class AWSPricingService {
         tenancy
       };
 
+      logger.info(`EC2 pricing fetched: ${instanceType} = $${pricing.pricePerHour}/hour`);
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching EC2 pricing for \${instanceType}:`, error);
-      throw new Error(`Unable to fetch pricing for \${instanceType} in \${region}. Please verify the instance type exists.`);
+      logger.error(`Failed to fetch EC2 pricing for ${instanceType}:`, error.message);
+      throw error;
     }
   }
 
   async getRDSPricing(instanceClass, engine, region, deploymentOption = 'Single-AZ') {
-    const cacheKey = `rds-\${instanceClass}-\${engine}-\${region}-\${deploymentOption}`;
+    const cacheKey = `rds-${instanceClass}-${engine}-${region}-${deploymentOption}`;
     
     if (this.isCacheValid(cacheKey)) {
+      logger.info(`Cache hit for RDS: ${instanceClass}`);
       return this.cache.get(cacheKey).data;
     }
 
     try {
+      logger.info(`Fetching RDS pricing for ${instanceClass} (${engine}) in ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
@@ -92,7 +93,7 @@ export class AWSPricingService {
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No pricing data found for RDS \${instanceClass} with \${engine} in \${region}`);
+        throw new Error(`No pricing data found for RDS ${instanceClass} with ${engine}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -110,22 +111,24 @@ export class AWSPricingService {
         deploymentOption
       };
 
+      logger.info(`RDS pricing fetched: ${instanceClass} = $${pricing.pricePerHour}/hour`);
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching RDS pricing for \${instanceClass}:`, error);
-      throw new Error(`Unable to fetch RDS pricing for \${instanceClass} with \${engine} in \${region}`);
+      logger.error(`Failed to fetch RDS pricing for ${instanceClass}:`, error.message);
+      throw error;
     }
   }
 
   async getEBSPricing(volumeType, region) {
-    const cacheKey = `ebs-\${volumeType}-\${region}`;
+    const cacheKey = `ebs-${volumeType}-${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
     }
 
     try {
+      logger.info(`Fetching EBS pricing for ${volumeType} in ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
@@ -142,7 +145,7 @@ export class AWSPricingService {
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No pricing data found for EBS \${volumeType} in \${region}`);
+        throw new Error(`No pricing data found for EBS ${volumeType}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -157,11 +160,12 @@ export class AWSPricingService {
         currency: 'USD'
       };
 
+      logger.info(`EBS pricing fetched: ${volumeType} = $${pricing.pricePerGBMonth}/GB-month`);
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching EBS pricing for \${volumeType}:`, error);
-      throw new Error(`Unable to fetch EBS pricing for \${volumeType} in \${region}`);
+      logger.error(`Failed to fetch EBS pricing for ${volumeType}:`, error.message);
+      throw error;
     }
   }
 
@@ -173,8 +177,10 @@ export class AWSPricingService {
     }
 
     try {
+      logger.info(`Fetching NAT Gateway pricing for ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
+      // Get all NAT Gateway related pricing
       const filters = [
         { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
         { Type: 'TERM_MATCH', Field: 'productFamily', Value: 'NAT Gateway' }
@@ -192,12 +198,13 @@ export class AWSPricingService {
         throw new Error(`No NAT Gateway pricing found for ${region}`);
       }
 
-      // Parse all price items to find hourly and data processing rates
       let pricePerHour = null;
       let dataProcessingPerGB = null;
 
+      // Parse each price item
       for (const priceItem of response.PriceList) {
         const priceData = JSON.parse(priceItem);
+        const attributes = priceData.product.attributes;
         const onDemandTerms = priceData.terms.OnDemand;
         const firstTerm = Object.values(onDemandTerms)[0];
         const priceDimensions = Object.values(firstTerm.priceDimensions);
@@ -205,26 +212,27 @@ export class AWSPricingService {
         for (const dimension of priceDimensions) {
           const desc = (dimension.description || '').toLowerCase();
           const unit = (dimension.unit || '').toLowerCase();
+          const usageType = (attributes.usagetype || '').toLowerCase();
           
-          // Find hourly charge
-          if (unit === 'hrs' || desc.includes('per hour') || desc.includes('natgateway-hours')) {
+          // Hourly charge (NAT Gateway hours)
+          if ((unit === 'hrs' || desc.includes('hour')) && 
+              (usageType.includes('natgateway-hours') || desc.includes('natgateway-hours'))) {
             pricePerHour = parseFloat(dimension.pricePerUnit.USD);
+            logger.info(`Found NAT Gateway hourly rate: $${pricePerHour}`);
           }
           
-          // Find data processing charge
-          if (unit === 'gb' || desc.includes('data processed') || desc.includes('natgateway-bytes')) {
+          // Data processing charge
+          if ((unit === 'gb' || desc.includes('gb')) && 
+              (usageType.includes('natgateway-bytes') || desc.includes('data processed'))) {
             dataProcessingPerGB = parseFloat(dimension.pricePerUnit.USD);
+            logger.info(`Found NAT Gateway data processing rate: $${dataProcessingPerGB}/GB`);
           }
-        }
-
-        // If we found both, we can stop
-        if (pricePerHour !== null && dataProcessingPerGB !== null) {
-          break;
         }
       }
 
       if (pricePerHour === null || dataProcessingPerGB === null) {
-        throw new Error(`Could not parse NAT Gateway pricing dimensions for ${region}`);
+        logger.warn(`Incomplete NAT Gateway pricing data. Hour: ${pricePerHour}, Data: ${dataProcessingPerGB}`);
+        throw new Error(`Could not parse complete NAT Gateway pricing for ${region}`);
       }
 
       const pricing = {
@@ -237,19 +245,20 @@ export class AWSPricingService {
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching NAT Gateway pricing:`, error);
-      throw new Error(`Unable to fetch NAT Gateway pricing for ${region}: ${error.message}`);
+      logger.error(`Failed to fetch NAT Gateway pricing:`, error.message);
+      throw error;
     }
   }
 
   async getLoadBalancerPricing(lbType, region) {
-    const cacheKey = `lb-\${lbType}-\${region}`;
+    const cacheKey = `lb-${lbType}-${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
     }
 
     try {
+      logger.info(`Fetching Load Balancer pricing for ${lbType} in ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
       const productFamily = lbType === 'application' ? 
@@ -263,51 +272,69 @@ export class AWSPricingService {
       const command = new GetProductsCommand({
         ServiceCode: 'AWSELB',
         Filters: filters,
-        MaxResults: 10
+        MaxResults: 50
       });
 
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No Load Balancer pricing found for \${lbType} in \${region}`);
+        throw new Error(`No Load Balancer pricing found for ${lbType} in ${region}`);
       }
 
-      const priceData = JSON.parse(response.PriceList[0]);
-      const onDemandTerms = priceData.terms.OnDemand;
-      const firstTerm = Object.values(onDemandTerms)[0];
-      const priceDimensions = Object.values(firstTerm.priceDimensions);
+      let pricePerHour = null;
+      let pricePerLCU = null;
 
-      const hourlyDimension = priceDimensions.find(pd => pd.unit === 'Hrs');
-      const lcuDimension = priceDimensions.find(pd => pd.unit && pd.unit.includes('LCU'));
+      for (const priceItem of response.PriceList) {
+        const priceData = JSON.parse(priceItem);
+        const attributes = priceData.product.attributes;
+        const onDemandTerms = priceData.terms.OnDemand;
+        const firstTerm = Object.values(onDemandTerms)[0];
+        const priceDimensions = Object.values(firstTerm.priceDimensions);
+
+        for (const dimension of priceDimensions) {
+          const unit = (dimension.unit || '').toLowerCase();
+          const usageType = (attributes.usagetype || '').toLowerCase();
+          
+          if (unit === 'hrs' || usageType.includes('loadbalancer-hour')) {
+            pricePerHour = parseFloat(dimension.pricePerUnit.USD);
+          }
+          
+          if (unit.includes('lcu') || usageType.includes('lcu-hour')) {
+            pricePerLCU = parseFloat(dimension.pricePerUnit.USD);
+          }
+        }
+      }
+
+      if (pricePerHour === null) {
+        throw new Error(`Could not parse Load Balancer hourly pricing for ${region}`);
+      }
 
       const pricing = {
         lbType,
         region,
-        pricePerHour: hourlyDimension ? parseFloat(hourlyDimension.pricePerUnit.USD) : null,
-        pricePerLCU: lcuDimension ? parseFloat(lcuDimension.pricePerUnit.USD) : null,
+        pricePerHour,
+        pricePerLCU: pricePerLCU || 0,
         currency: 'USD'
       };
 
-      if (!pricing.pricePerHour) {
-        throw new Error('Invalid Load Balancer pricing data');
-      }
-
+      logger.info(`LB pricing fetched: ${lbType} = $${pricePerHour}/hour + $${pricePerLCU}/LCU`);
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching Load Balancer pricing:`, error);
-      throw new Error(`Unable to fetch Load Balancer pricing for \${lbType} in \${region}`);
+      logger.error(`Failed to fetch Load Balancer pricing:`, error.message);
+      throw error;
     }
   }
 
   async getCloudWatchAlarmPricing(region) {
-    const cacheKey = `cloudwatch-alarm-\${region}`;
+    const cacheKey = `cloudwatch-alarm-${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
     }
 
     try {
+      logger.info(`Fetching CloudWatch Alarm pricing for ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
@@ -324,7 +351,7 @@ export class AWSPricingService {
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No CloudWatch Alarm pricing found for \${region}`);
+        throw new Error(`No CloudWatch Alarm pricing found`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -338,26 +365,28 @@ export class AWSPricingService {
         currency: 'USD'
       };
 
+      logger.info(`CloudWatch Alarm pricing: $${pricing.pricePerAlarmMonth}/month`);
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching CloudWatch Alarm pricing:`, error);
-      throw new Error(`Unable to fetch CloudWatch Alarm pricing for \${region}`);
+      logger.error(`Failed to fetch CloudWatch Alarm pricing:`, error.message);
+      throw error;
     }
   }
 
-  async getElastiCachePricing(nodeType, region) {
-    const cacheKey = `elasticache-\${nodeType}-\${region}`;
+  async getElastiCachePricing(nodeType, engine, region) {
+    const cacheKey = `elasticache-${nodeType}-${engine}-${region}`;
     
     if (this.isCacheValid(cacheKey)) {
       return this.cache.get(cacheKey).data;
     }
 
     try {
+      logger.info(`Fetching ElastiCache pricing for ${nodeType} (${engine}) in ${region}...`);
       const pricingClient = this.clientFactory.createPricingClient();
       
       const filters = [
-        { Type: 'TERM_MATCH', Field: 'cacheEngine', Value: 'Redis' },
+        { Type: 'TERM_MATCH', Field: 'cacheEngine', Value: engine },
         { Type: 'TERM_MATCH', Field: 'instanceType', Value: nodeType },
         { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) }
       ];
@@ -371,7 +400,7 @@ export class AWSPricingService {
       const response = await pricingClient.send(command);
       
       if (!response.PriceList || response.PriceList.length === 0) {
-        throw new Error(`No ElastiCache pricing found for \${nodeType} in \${region}`);
+        throw new Error(`No ElastiCache pricing found for ${nodeType}`);
       }
 
       const priceData = JSON.parse(response.PriceList[0]);
@@ -383,15 +412,15 @@ export class AWSPricingService {
         nodeType,
         region,
         pricePerHour: parseFloat(priceDimensions.pricePerUnit.USD),
-        unit: priceDimensions.unit,
         currency: 'USD'
       };
 
+      logger.info(`ElastiCache pricing fetched: ${nodeType} = $${pricing.pricePerHour}/hour`);
       this.setCache(cacheKey, pricing);
       return pricing;
     } catch (error) {
-      logger.error(`Error fetching ElastiCache pricing for \${nodeType}:`, error);
-      throw new Error(`Unable to fetch ElastiCache pricing for \${nodeType} in \${region}`);
+      logger.error(`Failed to fetch ElastiCache pricing for ${nodeType}:`, error.message);
+      throw error;
     }
   }
 
@@ -421,9 +450,7 @@ export class AWSPricingService {
       'mariadb': 'MariaDB',
       'aurora': 'Aurora MySQL',
       'aurora-mysql': 'Aurora MySQL',
-      'aurora-postgresql': 'Aurora PostgreSQL',
-      'oracle-se2': 'Oracle',
-      'sqlserver-ex': 'SQL Server'
+      'aurora-postgresql': 'Aurora PostgreSQL'
     };
 
     return engineMapping[engine.toLowerCase()] || engine;
@@ -431,16 +458,12 @@ export class AWSPricingService {
 
   isCacheValid(key) {
     if (!this.cache.has(key)) return false;
-    
     const cached = this.cache.get(key);
     return Date.now() - cached.timestamp < this.cacheExpiry;
   }
 
   setCache(key, data) {
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
+    this.cache.set(key, { data, timestamp: Date.now() });
   }
 
   clearCache() {

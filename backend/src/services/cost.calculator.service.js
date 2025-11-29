@@ -29,11 +29,16 @@ export class CostCalculatorService {
       });
     }
 
+    logger.info(`Starting cost calculation for ${processedResources.length} resources...`);
+
     // Calculate costs
     for (const resource of processedResources) {
       try {
+        logger.info(`Calculating cost for ${resource.type}.${resource.name}...`);
         const cost = await this.calculateResourceCost(resource, region);
+        
         if (cost) {
+          logger.info(`Cost calculated for ${resource.name}: $${cost.hourly}/hour`);
           costBreakdown.resources.push({
             type: resource.type,
             name: resource.name,
@@ -42,9 +47,11 @@ export class CostCalculatorService {
             mockedAttributes: resource.mocked?.attributes || []
           });
           costBreakdown.summary.hourly += cost.hourly || 0;
+        } else {
+          logger.info(`No cost calculated for ${resource.type}.${resource.name} (may be free resource)`);
         }
       } catch (error) {
-        logger.error(`Error calculating cost for ${resource.type}.${resource.name}:`, error);
+        logger.error(`Error calculating cost for ${resource.type}.${resource.name}:`, error.message);
         costBreakdown.errors.push({
           resource: `${resource.type}.${resource.name}`,
           error: error.message
@@ -59,6 +66,7 @@ export class CostCalculatorService {
 
     costBreakdown.mockingReport = this.mockerService.generateMockingReport(processedResources);
 
+    logger.info(`Total cost calculated: $${costBreakdown.summary.hourly}/hour`);
     return costBreakdown;
   }
 
@@ -85,7 +93,7 @@ export class CostCalculatorService {
       case 'aws_autoscaling_group':
         return await this.calculateAutoScalingGroupCost(resource, region);
       default:
-        logger.debug(`Cost calculation not supported for ${resource.type}`);
+        logger.debug(`No cost calculation for ${resource.type} (may be free)`);
         return null;
     }
   }
@@ -97,7 +105,7 @@ export class CostCalculatorService {
     const pricing = await this.pricingService.getEC2Pricing(instanceType, region, 'Linux');
     let hourlyCost = pricing.pricePerHour;
 
-    // EBS volumes
+    // EBS root volume
     let ebsCost = 0;
     if (config.root_block_device) {
       const volumeSize = config.root_block_device.volume_size || 8;
@@ -133,7 +141,7 @@ export class CostCalculatorService {
     return {
       hourly: instanceCost + storageCost,
       breakdown: { compute: instanceCost, storage: storageCost },
-      details: { instanceClass: config.instance_class, engine: config.engine, region }
+      details: { instanceClass: config.instance_class, engine: config.engine, allocatedStorage, region }
     };
   }
 
@@ -152,9 +160,17 @@ export class CostCalculatorService {
   async calculateElastiCacheCost(resource, region) {
     const config = resource.config;
     const nodeType = config.node_type;
-    const numNodes = config.num_cache_nodes || config.num_cache_clusters || 1;
+    
+    let numNodes = 1;
+    if (resource.type === 'aws_elasticache_replication_group') {
+      const clusters = config.num_cache_clusters || config.number_cache_clusters || 2;
+      const replicas = config.replicas_per_node_group || 1;
+      numNodes = clusters * replicas;
+    } else {
+      numNodes = config.num_cache_nodes || 1;
+    }
 
-    const pricing = await this.pricingService.getElastiCachePricing(nodeType, region);
+    const pricing = await this.pricingService.getElastiCachePricing(nodeType, 'Redis', region);
     const hourlyCost = pricing.pricePerHour * numNodes;
 
     return {
@@ -169,26 +185,32 @@ export class CostCalculatorService {
     const lbType = config.load_balancer_type || 'application';
     const pricing = await this.pricingService.getLoadBalancerPricing(lbType, region);
 
-    const hourlyCost = pricing.pricePerHour + (pricing.pricePerLCU || 0);
+    const hourlyCost = pricing.pricePerHour + pricing.pricePerLCU;
 
     return {
       hourly: hourlyCost,
-      breakdown: { base: pricing.pricePerHour, lcu: pricing.pricePerLCU || 0 },
-      details: { type: lbType, region }
+      breakdown: { base: pricing.pricePerHour, lcu: pricing.pricePerLCU },
+      details: { type: lbType, region, note: 'Includes 1 LCU estimate' }
     };
   }
 
   async calculateNATGatewayCost(resource, region) {
     const pricing = await this.pricingService.getNATGatewayPricing(region);
     
-    // Estimate 100GB/day data transfer
+    // Estimate 100GB/day = 4.17 GB/hour
     const estimatedDataGBPerHour = 100 / 24;
     const dataCost = estimatedDataGBPerHour * pricing.dataProcessingPerGB;
 
     return {
       hourly: pricing.pricePerHour + dataCost,
       breakdown: { base: pricing.pricePerHour, data: dataCost },
-      details: { region, note: 'Data transfer estimated at 100GB/day' }
+      details: { 
+        region, 
+        baseHourly: pricing.pricePerHour,
+        dataProcessingPerGB: pricing.dataProcessingPerGB,
+        estimatedDataGBPerDay: 100,
+        note: 'Data processing estimated at 100GB/day'
+      }
     };
   }
 
@@ -199,18 +221,24 @@ export class CostCalculatorService {
     return {
       hourly: hourlyCost,
       breakdown: { alarm: hourlyCost },
-      details: { region }
+      details: { region, monthlyPrice: pricing.pricePerAlarmMonth }
     };
   }
 
   async calculateLaunchTemplateCost(resource, region) {
     const config = resource.config;
+    
+    if (!config.instance_type) {
+      logger.warn(`Launch template ${resource.name} has no instance_type`);
+      return null;
+    }
+
     const pricing = await this.pricingService.getEC2Pricing(config.instance_type, region, 'Linux');
 
     return {
       hourly: pricing.pricePerHour,
       breakdown: { compute: pricing.pricePerHour },
-      details: { instanceType: config.instance_type, region, note: 'Per instance cost' }
+      details: { instanceType: config.instance_type, region, note: 'Per instance if launched' }
     };
   }
 
@@ -218,15 +246,40 @@ export class CostCalculatorService {
     const config = resource.config;
     const desiredCapacity = config.desired_capacity || 1;
     
-    // Try to get instance type from launch template reference
-    // This is simplified - in production you'd resolve the reference
-    const instanceType = config.launch_template?.instance_type || 't3.small';
+    // Use resolved launch template if available
+    let instanceType = null;
+    
+    if (config._resolved_launch_template) {
+      instanceType = config._resolved_launch_template.instance_type;
+      logger.info(`Using resolved instance type for ASG ${resource.name}: ${instanceType}`);
+    } else {
+      // Fallback or attempt to use mocked value
+      if (config.launch_template && Array.isArray(config.launch_template)) {
+         // Try to guess from structure if not resolved but this is risky
+      }
+      // Default/Mock fallback logic can be here if desired, 
+      // but per instruction we return null or use a default if not found.
+      // The provided code had a fallback in the main block, but the update block 
+      // had a specific logic. I will use the UPDATE logic as requested in "4. Update ASG Calculator to Use Resolved Template"
+      // which returns null if not resolved.
+      logger.warn(`Could not resolve launch template for ASG ${resource.name}`);
+      return null;
+    }
+  
     const pricing = await this.pricingService.getEC2Pricing(instanceType, region, 'Linux');
-
+    const hourlyCost = pricing.pricePerHour * desiredCapacity;
+  
     return {
-      hourly: pricing.pricePerHour * desiredCapacity,
-      breakdown: { compute: pricing.pricePerHour * desiredCapacity },
-      details: { instanceType, desiredCapacity, region }
+      hourly: hourlyCost,
+      breakdown: { compute: hourlyCost },
+      details: { 
+        instanceType, 
+        desiredCapacity,
+        minSize: config.min_size,
+        maxSize: config.max_size,
+        region,
+        note: `Cost for ${desiredCapacity} instances at desired capacity`
+      }
     };
   }
 
@@ -242,7 +295,7 @@ export class CostCalculatorService {
       region: costBreakdown.region,
       currency: costBreakdown.currency,
       timestamp: costBreakdown.timestamp,
-      errors: costBreakdown.errors
+      errors: costBreakdown.errors || []
     };
   }
 }

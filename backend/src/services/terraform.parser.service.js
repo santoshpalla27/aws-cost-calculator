@@ -29,6 +29,7 @@ export class TerraformParserService {
       
       // Resolve references after all files are parsed
       this.resolveReferences();
+      this.resolveLaunchTemplateReferences(this.parsedData.resources);
       
       return this.parsedData;
     } catch (error) {
@@ -215,6 +216,37 @@ export class TerraformParserService {
     }
   }
 
+  resolveLaunchTemplateReferences(resources) {
+    const launchTemplates = new Map();
+    
+    // Build map of launch templates
+    for (const resource of resources) {
+      if (resource.type === 'aws_launch_template') {
+        launchTemplates.set(resource.name, resource.config);
+      }
+    }
+    
+    // Resolve ASG references to launch templates
+    for (const resource of resources) {
+      if (resource.type === 'aws_autoscaling_group' && resource.config.launch_template) {
+        const ltConfig = resource.config.launch_template;
+        if (Array.isArray(ltConfig)) {
+          const ltRef = ltConfig[0];
+          // Extract template name from reference
+          const ltIdMatch = String(ltRef.id || '').match(/aws_launch_template\.([^.]+)/);
+          if (ltIdMatch) {
+            const ltName = ltIdMatch[1];
+            const template = launchTemplates.get(ltName);
+            if (template) {
+              resource.config._resolved_launch_template = template;
+              logger.info(`Resolved launch template for ASG ${resource.name}: ${ltName}`);
+            }
+          }
+        }
+      }
+    }
+  }
+
   resolveConfigReferences(config, depth = 0) {
     if (depth > 10) return config; // Prevent infinite recursion
 
@@ -240,11 +272,11 @@ export class TerraformParserService {
   resolveStringReference(str) {
     if (typeof str !== 'string') return str;
     
-    // Remove \${} wrapper if present
-    let cleanStr = str.replace(/^\\$\\{(.*)\\\}\$/, '$1');
+    // Remove ${} wrapper if present
+    let cleanStr = str.replace(/^\$\{(.+)\}$/, '$1');
     
     // Handle var.xxx references
-    const varMatch = cleanStr.match(/^var\.([^.]+)\\/);
+    const varMatch = cleanStr.match(/^var\.([^.]+)/);
     if (varMatch) {
       const varName = varMatch[1];
       if (this.parsedData.variables[varName]) {
@@ -259,7 +291,7 @@ export class TerraformParserService {
     }
 
     // Handle local.xxx references
-    const localMatch = cleanStr.match(/^local\.([^.]+)\\/);
+    const localMatch = cleanStr.match(/^local\.([^.]+)/);
     if (localMatch) {
       const localName = localMatch[1];
       if (this.parsedData.locals[localName] !== undefined) {
