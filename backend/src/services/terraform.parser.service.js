@@ -21,14 +21,15 @@ export class TerraformParserService {
   async parseDirectory(dirPath) {
     try {
       logger.info(`Parsing directory: ${dirPath}`);
-      const structure = await this.buildDirectoryStructure(dirPath);
-      logger.info(`Directory structure: ${JSON.stringify(structure, null, 2)}`);
       
-      await this.parseFiles(structure);
-      await this.resolveModules(dirPath);
-      this.resolveReferences();
+      // Parse all .tf files recursively
+      await this.parseDirectoryRecursive(dirPath);
       
       logger.info(`Parsed data summary: ${this.parsedData.resources.length} resources found.`);
+      
+      // Resolve references after all files are parsed
+      this.resolveReferences();
+      
       return this.parsedData;
     } catch (error) {
       logger.error('Error parsing Terraform directory:', error);
@@ -36,47 +37,28 @@ export class TerraformParserService {
     }
   }
 
-  async buildDirectoryStructure(dirPath) {
-    const structure = {
-      root: dirPath,
-      files: [],
-      modules: []
-    };
-
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-
-      if (entry.isDirectory()) {
-        if (entry.name === 'modules' || entry.name === '.terraform') {
-          const subStructure = await this.buildDirectoryStructure(fullPath);
-          structure.modules.push({
-            name: entry.name,
-            path: fullPath,
-            structure: subStructure
-          });
+  async parseDirectoryRecursive(dirPath) {
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        
+        // Skip hidden directories and node_modules
+        if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '__MACOSX') {
+          continue;
         }
-      } else if (entry.isFile() && entry.name.endsWith('.tf')) {
-        structure.files.push({
-          name: entry.name,
-          path: fullPath
-        });
+        
+        if (entry.isDirectory()) {
+          // Recursively parse subdirectories
+          await this.parseDirectoryRecursive(fullPath);
+        } else if (entry.isFile() && (entry.name.endsWith('.tf') || entry.name.endsWith('.tfvars'))) {
+          // Parse Terraform files
+          await this.parseFile(fullPath);
+        }
       }
-    }
-
-    return structure;
-  }
-
-  async parseFiles(structure) {
-    // Parse root files
-    for (const file of structure.files) {
-      await this.parseFile(file.path);
-    }
-
-    // Parse module files
-    for (const module of structure.modules) {
-      await this.parseFiles(module.structure);
+    } catch (error) {
+      logger.error(`Error reading directory ${dirPath}:`, error);
     }
   }
 
@@ -84,130 +66,145 @@ export class TerraformParserService {
     try {
       logger.info(`Parsing file: ${filePath}`);
       const content = await fs.readFile(filePath, 'utf-8');
-
+      
       logger.info(`File content length: ${content.length} bytes`);
       logger.info(`First 200 chars: ${content.substring(0, 200)}`);
-
+      
       // Attempt to parse
       let parsed;
       try {
-        // Use parseToObject which is the standard method for hcl2-parser
-        // It might return an array if there are multiple blocks, or an object.
-        // Note: hcl2-parser typically returns an array of objects for each block type if using parseToObject?
-        // Let's check if hcl has parseToObject
         if (typeof hcl.parseToObject === 'function') {
-           parsed = hcl.parseToObject(content);
+          parsed = hcl.parseToObject(content);
         } else {
-           // Fallback or debug
-           logger.error(`hcl2-parser does not have parseToObject. Keys: ${Object.keys(hcl)}`);
-           throw new Error('hcl2-parser interface mismatch');
+          logger.error(`hcl2-parser does not have parseToObject. Keys: ${Object.keys(hcl)}`);
+          throw new Error('hcl2-parser interface mismatch');
         }
       } catch (parseError) {
         logger.error(`HCL Parse error for ${filePath}:`, parseError);
         return; // Skip file if parsing fails
       }
-
-      // Log the raw parsed output for debugging
+      
+      // Log the raw parsed output
       logger.info(`Raw parsed content for ${path.basename(filePath)}: ${JSON.stringify(parsed, null, 2)}`);
 
       if (!parsed) return;
+      
+      // Handle both array and object responses
+      let parsedObj;
+      if (Array.isArray(parsed)) {
+        // Filter out null values and merge all objects
+        const validObjects = parsed.filter(item => item !== null && typeof item === 'object');
+        if (validObjects.length === 0) {
+          logger.warn(`No valid parsed objects in ${filePath}`);
+          return;
+        }
+        
+        // Merge all objects
+        parsedObj = validObjects.reduce((acc, obj) => {
+          Object.keys(obj).forEach(key => {
+            if (!acc[key]) {
+              acc[key] = obj[key];
+            } else {
+              // Merge if both are objects
+              if (typeof acc[key] === 'object' && typeof obj[key] === 'object') {
+                acc[key] = { ...acc[key], ...obj[key] };
+              }
+            }
+          });
+          return acc;
+        }, {});
+      } else {
+        parsedObj = parsed;
+      }
 
-      // hcl2-parser returns an array of objects. We need to merge them if so, or handle them.
-      // Actually, parseToObject typically returns a single object with keys like "resource", "variable", etc.
-      // EXCEPT if the input has duplicates, it might behavior differently.
-      // But typically it returns { resource: { ... }, variable: { ... } }
-
-      // If parsed is an array (sometimes it returns [ { resource: ... } ]), we should normalize.
-      const parsedObj = Array.isArray(parsed) ? parsed[0] : parsed;
-
-      if (!parsedObj) return;
+      logger.info(`Processing parsed object keys: ${Object.keys(parsedObj).join(', ')}`);
 
       // Extract resources
       if (parsedObj.resource) {
+        logger.info(`Found resources in ${filePath}`);
         for (const [resourceType, resources] of Object.entries(parsedObj.resource)) {
-          for (const [resourceName, config] of Object.entries(resources)) {
-            this.parsedData.resources.push({
-              type: resourceType,
-              name: resourceName,
-              config: config,
-              file: filePath
-            });
+          // Handle both array and object format
+          const resourceList = Array.isArray(resources) ? resources : [resources];
+          
+          for (const resourceObj of resourceList) {
+            for (const [resourceName, config] of Object.entries(resourceObj)) {
+              logger.info(`Adding resource: ${resourceType}.${resourceName}`);
+              this.parsedData.resources.push({
+                type: resourceType,
+                name: resourceName,
+                config: config,
+                file: filePath
+              });
+            }
           }
         }
       }
 
       // Extract variables
       if (parsedObj.variable) {
-        this.parsedData.variables = {
-          ...this.parsedData.variables,
-          ...parsedObj.variable
-        };
+        const varList = Array.isArray(parsedObj.variable) ? parsedObj.variable : [parsedObj.variable];
+        for (const varObj of varList) {
+          this.parsedData.variables = {
+            ...this.parsedData.variables,
+            ...varObj
+          };
+        }
       }
 
       // Extract locals
       if (parsedObj.locals) {
-        this.parsedData.locals = {
-          ...this.parsedData.locals,
-          ...parsedObj.locals
-        };
+        const localsList = Array.isArray(parsedObj.locals) ? parsedObj.locals : [parsedObj.locals];
+        for (const localsObj of localsList) {
+          this.parsedData.locals = {
+            ...this.parsedData.locals,
+            ...localsObj
+          };
+        }
       }
 
       // Extract data sources
       if (parsedObj.data) {
         for (const [dataType, dataSources] of Object.entries(parsedObj.data)) {
-          for (const [dataName, config] of Object.entries(dataSources)) {
-            this.parsedData.dataSource[`${dataType}.${dataName}`] = config;
+          const dataList = Array.isArray(dataSources) ? dataSources : [dataSources];
+          
+          for (const dataObj of dataList) {
+            for (const [dataName, config] of Object.entries(dataObj)) {
+              this.parsedData.dataSource[`${dataType}.${dataName}`] = config;
+            }
           }
         }
       }
 
       // Extract modules
       if (parsedObj.module) {
-        for (const [moduleName, moduleConfig] of Object.entries(parsedObj.module)) {
-          this.parsedData.modules.push({
-            name: moduleName,
-            source: moduleConfig.source,
-            config: moduleConfig,
-            file: filePath
-          });
+        const moduleList = Array.isArray(parsedObj.module) ? parsedObj.module : [parsedObj.module];
+        
+        for (const moduleObj of moduleList) {
+          for (const [moduleName, moduleConfig] of Object.entries(moduleObj)) {
+            this.parsedData.modules.push({
+              name: moduleName,
+              source: moduleConfig.source,
+              config: moduleConfig,
+              file: filePath
+            });
+          }
         }
       }
 
       // Extract outputs
       if (parsedObj.output) {
-        this.parsedData.outputs = {
-          ...this.parsedData.outputs,
-          ...parsedObj.output
-        };
+        const outputList = Array.isArray(parsedObj.output) ? parsedObj.output : [parsedObj.output];
+        for (const outputObj of outputList) {
+          this.parsedData.outputs = {
+            ...this.parsedData.outputs,
+            ...outputObj
+          };
+        }
       }
 
     } catch (error) {
       logger.error(`Error parsing file ${filePath}:`, error);
-      throw error;
-    }
-  }
-
-  async resolveModules(rootPath) {
-    for (const module of this.parsedData.modules) {
-      if (module.source.startsWith('./') || module.source.startsWith('../')) {
-        const modulePath = path.resolve(rootPath, module.source);
-        try {
-          const moduleStructure = await this.buildDirectoryStructure(modulePath);
-          const moduleParser = new TerraformParserService();
-          await moduleParser.parseFiles(moduleStructure);
-          
-          // Add module resources to main resources with module prefix
-          for (const resource of moduleParser.parsedData.resources) {
-            this.parsedData.resources.push({
-              ...resource,
-              module: module.name,
-              moduleSource: module.source
-            });
-          }
-        } catch (error) {
-          logger.warn(`Could not resolve module ${module.name}:`, error.message);
-        }
-      }
+      // Don't throw, just log and continue with other files
     }
   }
 
@@ -241,16 +238,28 @@ export class TerraformParserService {
   }
 
   resolveStringReference(str) {
-    // Handle Terraform interpolation syntax
-    const varMatch = str.match(/\$\{var\.([^}]+)\}/);
+    if (typeof str !== 'string') return str;
+    
+    // Remove \${} wrapper if present
+    let cleanStr = str.replace(/^\\$\\{(.*)\\\}\$/, '$1');
+    
+    // Handle var.xxx references
+    const varMatch = cleanStr.match(/^var\.([^.]+)\\/);
     if (varMatch) {
       const varName = varMatch[1];
-      if (this.parsedData.variables[varName]?.default !== undefined) {
-        return this.parsedData.variables[varName].default;
+      if (this.parsedData.variables[varName]) {
+        const varData = Array.isArray(this.parsedData.variables[varName]) 
+          ? this.parsedData.variables[varName][0] 
+          : this.parsedData.variables[varName];
+        
+        if (varData && varData.default !== undefined) {
+          return varData.default;
+        }
       }
     }
 
-    const localMatch = str.match(/\$\{local\.([^}]+)\}/);
+    // Handle local.xxx references
+    const localMatch = cleanStr.match(/^local\.([^.]+)\\/);
     if (localMatch) {
       const localName = localMatch[1];
       if (this.parsedData.locals[localName] !== undefined) {
@@ -258,7 +267,7 @@ export class TerraformParserService {
       }
     }
 
-    return str;
+    return str; // Return original if no resolution
   }
 
   getResourcesByType(type) {
