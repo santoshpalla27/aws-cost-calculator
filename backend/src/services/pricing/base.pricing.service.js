@@ -1,8 +1,9 @@
+import { GetProductsCommand } from '@aws-sdk/client-pricing';
 import logger from '../../config/logger.config.js';
 
 /**
  * Base class for all AWS pricing services
- * Provides common functionality for fetching and caching prices
+ * Fetches REAL prices from AWS Pricing API with fallback support
  */
 export class BasePricingService {
   constructor(pricingClient, serviceName) {
@@ -10,6 +11,7 @@ export class BasePricingService {
     this.serviceName = serviceName;
     this.cache = new Map();
     this.cacheExpiry = 86400000; // 24 hours
+    this.fallbackPricing = new Map(); // Subclasses populate this
   }
 
   /**
@@ -28,9 +30,6 @@ export class BasePricingService {
 
   /**
    * Calculate cost for a resource
-   * @param {Object} resource - Terraform resource
-   * @param {string} region - AWS region
-   * @returns {Promise<object>} Cost breakdown
    */
   async calculateCost(resource, region) {
     throw new Error('calculateCost() must be implemented by subclass');
@@ -44,22 +43,28 @@ export class BasePricingService {
   }
 
   /**
-   * Fetch pricing from AWS Pricing API
+   * Fetch pricing from AWS Pricing API - REAL API CALL
    */
   async fetchPricing(filters, maxResults = 100) {
-    const { GetProductsCommand } = await import('@aws-sdk/client-pricing');
-    
-    const command = new GetProductsCommand({
-      ServiceCode: this.getServiceCode(),
-      Filters: filters,
-      MaxResults: maxResults
-    });
-
     try {
+      const command = new GetProductsCommand({
+        ServiceCode: this.getServiceCode(),
+        Filters: filters,
+        MaxResults: maxResults
+      });
+
+      logger.info(`Fetching ${this.serviceName} pricing from AWS API...`);
       const response = await this.pricingClient.send(command);
-      return response.PriceList || [];
+      
+      if (response.PriceList && response.PriceList.length > 0) {
+        logger.info(`Received ${response.PriceList.length} pricing entries for ${this.serviceName}`);
+        return response.PriceList;
+      }
+      
+      logger.warn(`No pricing data returned from AWS API for ${this.serviceName}`);
+      return [];
     } catch (error) {
-      logger.error(`Error fetching ${this.serviceName} pricing:`, error);
+      logger.error(`AWS Pricing API error for ${this.serviceName}:`, error.message);
       throw error;
     }
   }
@@ -72,21 +77,62 @@ export class BasePricingService {
       return null;
     }
 
-    const priceData = JSON.parse(priceList[0]);
-    const terms = priceData.terms[termType];
-    
-    if (!terms) return null;
+    try {
+      const priceData = typeof priceList[0] === 'string' 
+        ? JSON.parse(priceList[0]) 
+        : priceList[0];
+      
+      const terms = priceData.terms?.[termType];
+      if (!terms) return null;
 
-    const firstTerm = Object.values(terms)[0];
-    const priceDimensions = Object.values(firstTerm.priceDimensions);
-    
-    return priceDimensions.map(pd => ({
-      price: parseFloat(pd.pricePerUnit.USD || 0),
-      unit: pd.unit,
-      description: pd.description,
-      beginRange: pd.beginRange,
-      endRange: pd.endRange
-    }));
+      const firstTerm = Object.values(terms)[0];
+      const priceDimensions = Object.values(firstTerm.priceDimensions);
+      
+      return priceDimensions.map(pd => ({
+        price: parseFloat(pd.pricePerUnit.USD || 0),
+        unit: pd.unit,
+        description: pd.description,
+        beginRange: pd.beginRange,
+        endRange: pd.endRange
+      }));
+    } catch (error) {
+      logger.error('Error parsing pricing response:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get pricing with cache and fallback - MAIN METHOD FOR FETCHING PRICES
+   */
+  async getPricingWithFallback(cacheKey, fetchFn, fallbackKey) {
+    // Check cache first
+    const cached = this.getCached(cacheKey);
+    if (cached !== null) {
+      logger.debug(`Cache hit for ${cacheKey}`);
+      return cached;
+    }
+
+    try {
+      // Try to fetch from AWS API
+      const price = await fetchFn();
+      if (price !== null && price !== undefined) {
+        this.setCache(cacheKey, price);
+        return price;
+      }
+    } catch (error) {
+      logger.warn(`Failed to fetch pricing for ${cacheKey}: ${error.message}`);
+    }
+
+    // Use fallback pricing
+    if (this.fallbackPricing.has(fallbackKey)) {
+      const fallback = this.fallbackPricing.get(fallbackKey);
+      logger.warn(`Using fallback pricing for ${fallbackKey}: $${fallback}`);
+      this.setCache(cacheKey, fallback);
+      return fallback;
+    }
+
+    logger.error(`No pricing available for ${cacheKey} and no fallback defined`);
+    return 0;
   }
 
   /**
@@ -134,23 +180,21 @@ export class BasePricingService {
     this.cache.set(key, { data, timestamp: Date.now() });
   }
 
+  clearCache() {
+    this.cache.clear();
+  }
+
   /**
-   * Convert monthly cost to hourly
+   * Utility methods
    */
   monthlyToHourly(monthlyCost) {
-    return monthlyCost / 730; // Average hours in a month
+    return monthlyCost / 730;
   }
 
-  /**
-   * Convert GB to bytes
-   */
-  gbToBytes(gb) {
-    return gb * 1024 * 1024 * 1024;
+  hourlyToMonthly(hourlyCost) {
+    return hourlyCost * 730;
   }
 
-  /**
-   * Format cost response
-   */
   formatCostResponse(hourly, breakdown, details) {
     return {
       hourly,

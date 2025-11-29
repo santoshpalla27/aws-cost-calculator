@@ -4,6 +4,36 @@ import logger from '../../../../config/logger.config.js';
 export class EC2PricingService extends BasePricingService {
   constructor(pricingClient) {
     super(pricingClient, 'EC2');
+    this.initializeFallbackPricing();
+  }
+
+  initializeFallbackPricing() {
+    // Fallback pricing for when AWS API fails
+    this.fallbackPricing.set('t2.micro', 0.0116);
+    this.fallbackPricing.set('t2.small', 0.023);
+    this.fallbackPricing.set('t2.medium', 0.0464);
+    this.fallbackPricing.set('t3.micro', 0.0104);
+    this.fallbackPricing.set('t3.small', 0.0208);
+    this.fallbackPricing.set('t3.medium', 0.0416);
+    this.fallbackPricing.set('t3.large', 0.0832);
+    this.fallbackPricing.set('t3.xlarge', 0.1664);
+    this.fallbackPricing.set('m5.large', 0.096);
+    this.fallbackPricing.set('m5.xlarge', 0.192);
+    this.fallbackPricing.set('m5.2xlarge', 0.384);
+    this.fallbackPricing.set('c5.large', 0.085);
+    this.fallbackPricing.set('c5.xlarge', 0.17);
+    this.fallbackPricing.set('c7i-flex.large', 0.08479);
+    this.fallbackPricing.set('r5.large', 0.126);
+    this.fallbackPricing.set('r5.xlarge', 0.252);
+    
+    // EBS fallback pricing (per GB-month)
+    this.fallbackPricing.set('ebs-gp2', 0.10);
+    this.fallbackPricing.set('ebs-gp3', 0.08);
+    this.fallbackPricing.set('ebs-io1', 0.125);
+    this.fallbackPricing.set('ebs-io2', 0.125);
+    this.fallbackPricing.set('ebs-st1', 0.045);
+    this.fallbackPricing.set('ebs-sc1', 0.025);
+    this.fallbackPricing.set('ebs-standard', 0.05);
   }
 
   getServiceCode() {
@@ -14,18 +44,11 @@ export class EC2PricingService extends BasePricingService {
     return [
       'aws_instance',
       'aws_spot_instance_request',
-      'aws_spot_fleet_request',
-      'aws_ec2_fleet',
+      'aws_autoscaling_group',
       'aws_launch_template',
       'aws_launch_configuration',
-      'aws_autoscaling_group',
       'aws_ebs_volume',
-      'aws_ebs_snapshot',
-      'aws_ebs_snapshot_copy',
-      'aws_ami',
-      'aws_ami_copy',
-      'aws_ec2_capacity_reservation',
-      'aws_placement_group'
+      'aws_ebs_snapshot'
     ];
   }
 
@@ -40,11 +63,10 @@ export class EC2PricingService extends BasePricingService {
       case 'aws_ebs_volume':
         return this.calculateEBSVolumeCost(resource, region);
       case 'aws_ebs_snapshot':
-      case 'aws_ebs_snapshot_copy':
         return this.calculateSnapshotCost(resource, region);
       case 'aws_launch_template':
       case 'aws_launch_configuration':
-        return null; // No direct cost, cost comes from instances
+        return null; // No direct cost
       default:
         return null;
     }
@@ -53,40 +75,68 @@ export class EC2PricingService extends BasePricingService {
   async calculateInstanceCost(resource, region) {
     const config = resource.config;
     const instanceType = config.instance_type || 't3.micro';
-    const tenancy = config.tenancy || 'default';
     
-    // Get compute cost
-    const computeCost = await this.getInstancePricing(instanceType, region, tenancy);
+    logger.info(`Calculating EC2 cost for ${instanceType}...`);
+
+    // Fetch REAL EC2 pricing from AWS API
+    const computeCost = await this.getEC2Pricing(instanceType, region);
     
-    // Get root block device cost
+    // Fetch REAL EBS pricing for root volume
     const rootBlockCost = await this.calculateRootBlockDeviceCost(config, region);
     
-    // Get additional EBS volumes cost
+    // Calculate additional EBS volumes
     const ebsBlocksCost = await this.calculateAdditionalEBSCost(config, region);
     
-    // Get data transfer estimate (if specified)
-    const dataTransferCost = this.estimateDataTransferCost(config);
+    // Detailed monitoring cost
+    const monitoringCost = config.monitoring ? this.monthlyToHourly(2.10) : 0;
     
-    // EIP cost (if using)
-    const eipCost = config.associate_public_ip_address ? 0 : 0; // EIPs are free when attached
-    
-    // Detailed Monitoring cost
-    const monitoringCost = config.monitoring ? this.monthlyToHourly(2.10) : 0; // $2.10/month per instance
-    
-    const totalHourly = computeCost + rootBlockCost + ebsBlocksCost + dataTransferCost + monitoringCost;
+    const totalHourly = computeCost + rootBlockCost + ebsBlocksCost + monitoringCost;
+
+    logger.info(`EC2 ${instanceType}: compute=$${computeCost}/hr, storage=$${rootBlockCost + ebsBlocksCost}/hr, total=$${totalHourly}/hr`);
 
     return this.formatCostResponse(totalHourly, {
       compute: computeCost,
       rootStorage: rootBlockCost,
       additionalStorage: ebsBlocksCost,
-      dataTransfer: dataTransferCost,
       monitoring: monitoringCost
     }, {
       instanceType,
-      tenancy,
       region,
       rootBlockDevice: config.root_block_device,
       detailedMonitoring: !!config.monitoring
+    });
+  }
+
+  async calculateASGCost(resource, region) {
+    const config = resource.config;
+    const desiredCapacity = config.desired_capacity || config.min_size || 1;
+    
+    // Get instance type from resolved launch template
+    let instanceType = 't3.micro';
+    
+    if (config._resolved_launch_template?.instance_type) {
+      instanceType = config._resolved_launch_template.instance_type;
+      logger.info(`ASG ${resource.name}: Using instance_type from launch template: ${instanceType}`);
+    }
+
+    // Fetch REAL pricing
+    const instanceCost = await this.getEC2Pricing(instanceType, region);
+    const ebsCost = await this.getEBSPricing('gp2', region);
+    const storagePerInstance = this.monthlyToHourly(ebsCost * 8); // 8GB default
+    
+    const totalHourly = (instanceCost + storagePerInstance) * desiredCapacity;
+
+    logger.info(`ASG ${resource.name}: ${desiredCapacity}x ${instanceType} = $${totalHourly}/hr`);
+
+    return this.formatCostResponse(totalHourly, {
+      compute: instanceCost * desiredCapacity,
+      storage: storagePerInstance * desiredCapacity
+    }, {
+      instanceType,
+      desiredCapacity,
+      minSize: config.min_size,
+      maxSize: config.max_size,
+      region
     });
   }
 
@@ -94,9 +144,8 @@ export class EC2PricingService extends BasePricingService {
     const config = resource.config;
     const instanceType = config.instance_type || 't3.micro';
     
-    // Spot instances typically 60-90% cheaper than on-demand
-    // Using 70% discount as estimate
-    const onDemandCost = await this.getInstancePricing(instanceType, region);
+    // Spot instances are ~70% cheaper than on-demand
+    const onDemandCost = await this.getEC2Pricing(instanceType, region);
     const spotCost = onDemandCost * 0.3;
     
     const rootBlockCost = await this.calculateRootBlockDeviceCost(config, region);
@@ -109,45 +158,7 @@ export class EC2PricingService extends BasePricingService {
       instanceType,
       pricingModel: 'spot',
       estimatedDiscount: '70%',
-      note: 'Spot prices vary based on demand. This is an estimate.'
-    });
-  }
-
-  async calculateASGCost(resource, region) {
-    const config = resource.config;
-    const desiredCapacity = config.desired_capacity || config.min_size || 1;
-    
-    // Get instance type from launch template or launch configuration
-    let instanceType = 't3.micro';
-    
-    if (config._resolved_launch_template?.instance_type) {
-      instanceType = config._resolved_launch_template.instance_type;
-    } else if (config.launch_configuration) {
-      // Would need to resolve launch configuration
-      instanceType = config.launch_configuration.instance_type || 't3.micro';
-    } else if (config.mixed_instances_policy) {
-      // Handle mixed instances policy
-      const override = config.mixed_instances_policy[0]?.launch_template?.[0]?.override?.[0];
-      if (override?.instance_type) {
-        instanceType = override.instance_type;
-      }
-    }
-
-    const instanceCost = await this.getInstancePricing(instanceType, region);
-    const ebsCost = await this.getEBSPricing('gp3', region);
-    const storagePerInstance = (ebsCost * 8) / 730; // 8GB default
-    
-    const totalHourly = (instanceCost + storagePerInstance) * desiredCapacity;
-
-    return this.formatCostResponse(totalHourly, {
-      compute: instanceCost * desiredCapacity,
-      storage: storagePerInstance * desiredCapacity
-    }, {
-      instanceType,
-      desiredCapacity,
-      minSize: config.min_size,
-      maxSize: config.max_size,
-      note: `Cost calculated for ${desiredCapacity} instances at desired capacity`
+      note: 'Spot prices vary. This is an estimate.'
     });
   }
 
@@ -158,53 +169,40 @@ export class EC2PricingService extends BasePricingService {
     const iops = config.iops;
     const throughput = config.throughput;
     
-    let monthlyCost = 0;
-    
-    // Base storage cost
+    // Fetch REAL EBS pricing
     const storagePricing = await this.getEBSPricing(volumeType, region);
-    monthlyCost += storagePricing * size;
+    let monthlyCost = storagePricing * size;
     
-    // IOPS cost (for io1, io2, gp3)
+    // IOPS cost for provisioned IOPS volumes
     if (iops && ['io1', 'io2', 'gp3'].includes(volumeType)) {
       const iopsPricing = await this.getEBSIOPSPricing(volumeType, region);
       if (volumeType === 'gp3' && iops > 3000) {
-        monthlyCost += iopsPricing * (iops - 3000); // First 3000 IOPS free for gp3
+        monthlyCost += iopsPricing * (iops - 3000);
       } else if (['io1', 'io2'].includes(volumeType)) {
         monthlyCost += iopsPricing * iops;
       }
     }
     
-    // Throughput cost (for gp3)
+    // Throughput cost for gp3
     if (throughput && volumeType === 'gp3' && throughput > 125) {
-      const throughputPricing = await this.getEBSThroughputPricing(region);
-      monthlyCost += throughputPricing * (throughput - 125); // First 125 MB/s free
+      const throughputPricing = 0.04; // $0.04 per MB/s-month
+      monthlyCost += throughputPricing * (throughput - 125);
     }
     
-    // Snapshot cost estimate (if snapshots enabled)
-    if (config.snapshot_id) {
-      // Existing snapshot, no additional cost for the volume itself
-    }
-
     const hourly = this.monthlyToHourly(monthlyCost);
 
     return this.formatCostResponse(hourly, {
-      storage: this.monthlyToHourly(storagePricing * size),
-      iops: iops ? this.monthlyToHourly((iops - (volumeType === 'gp3' ? 3000 : 0)) * (await this.getEBSIOPSPricing(volumeType, region))) : 0,
-      throughput: throughput && volumeType === 'gp3' ? this.monthlyToHourly((throughput - 125) * (await this.getEBSThroughputPricing(region))) : 0
+      storage: hourly
     }, {
       volumeType,
       size,
       iops,
-      throughput,
-      region
+      throughput
     });
   }
 
   async calculateSnapshotCost(resource, region) {
-    const config = resource.config;
-    // Snapshots are charged per GB-month of data stored
-    // Estimate based on volume size if available
-    const estimatedSize = config.volume_size || 8;
+    const estimatedSize = resource.config.volume_size || 8;
     const snapshotPricePerGB = 0.05; // $0.05 per GB-month
     
     const monthlyCost = estimatedSize * snapshotPricePerGB;
@@ -214,7 +212,7 @@ export class EC2PricingService extends BasePricingService {
       storage: hourly
     }, {
       estimatedSize,
-      note: 'Snapshot costs depend on actual data stored, not provisioned size'
+      note: 'Snapshot costs depend on actual changed data'
     });
   }
 
@@ -246,116 +244,70 @@ export class EC2PricingService extends BasePricingService {
     return this.monthlyToHourly(totalMonthly);
   }
 
-  estimateDataTransferCost(config) {
-    // Data transfer costs are usage-based
-    // Return 0 as we can't estimate without usage data
-    return 0;
+  /**
+   * Fetch REAL EC2 pricing from AWS Pricing API
+   */
+  async getEC2Pricing(instanceType, region) {
+    const cacheKey = `ec2-${instanceType}-${region}`;
+    
+    return this.getPricingWithFallback(
+      cacheKey,
+      async () => {
+        const filters = [
+          { Type: 'TERM_MATCH', Field: 'instanceType', Value: instanceType },
+          { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
+          { Type: 'TERM_MATCH', Field: 'operatingSystem', Value: 'Linux' },
+          { Type: 'TERM_MATCH', Field: 'tenancy', Value: 'Shared' },
+          { Type: 'TERM_MATCH', Field: 'preInstalledSw', Value: 'NA' },
+          { Type: 'TERM_MATCH', Field: 'capacitystatus', Value: 'Used' }
+        ];
+
+        const priceList = await this.fetchPricing(filters);
+        const prices = this.parsePriceFromResponse(priceList);
+        
+        if (prices && prices.length > 0) {
+          logger.info(`EC2 pricing fetched: ${instanceType} = $${prices[0].price}/hour`);
+          return prices[0].price;
+        }
+        return null;
+      },
+      instanceType
+    );
   }
 
-  async getInstancePricing(instanceType, region, tenancy = 'default') {
-    const cacheKey = `ec2-${instanceType}-${region}-${tenancy}`;
-    const cached = this.getCached(cacheKey);
-    if (cached) return cached;
-
-    const filters = [
-      { Type: 'TERM_MATCH', Field: 'instanceType', Value: instanceType },
-      { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) },
-      { Type: 'TERM_MATCH', Field: 'operatingSystem', Value: 'Linux' },
-      { Type: 'TERM_MATCH', Field: 'tenancy', Value: tenancy === 'default' ? 'Shared' : tenancy },
-      { Type: 'TERM_MATCH', Field: 'preInstalledSw', Value: 'NA' },
-      { Type: 'TERM_MATCH', Field: 'capacitystatus', Value: 'Used' }
-    ];
-
-    try {
-      const priceList = await this.fetchPricing(filters);
-      const prices = this.parsePriceFromResponse(priceList);
-      
-      if (prices && prices.length > 0) {
-        const hourlyPrice = prices[0].price;
-        this.setCache(cacheKey, hourlyPrice);
-        logger.info(`EC2 ${instanceType} pricing: $${hourlyPrice}/hour`);
-        return hourlyPrice;
-      }
-      
-      throw new Error(`No pricing found for ${instanceType}`);
-    } catch (error) {
-      logger.error(`Failed to get EC2 pricing for ${instanceType}:`, error);
-      // Return fallback pricing
-      return this.getFallbackInstancePricing(instanceType);
-    }
-  }
-
+  /**
+   * Fetch REAL EBS pricing from AWS Pricing API
+   */
   async getEBSPricing(volumeType, region) {
     const cacheKey = `ebs-${volumeType}-${region}`;
-    const cached = this.getCached(cacheKey);
-    if (cached) return cached;
+    
+    return this.getPricingWithFallback(
+      cacheKey,
+      async () => {
+        const filters = [
+          { Type: 'TERM_MATCH', Field: 'volumeApiName', Value: volumeType },
+          { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) }
+        ];
 
-    const filters = [
-      { Type: 'TERM_MATCH', Field: 'volumeApiName', Value: volumeType },
-      { Type: 'TERM_MATCH', Field: 'location', Value: this.getRegionName(region) }
-    ];
-
-    try {
-      const priceList = await this.fetchPricing(filters);
-      const prices = this.parsePriceFromResponse(priceList);
-      
-      if (prices && prices.length > 0) {
-        const pricePerGB = prices[0].price;
-        this.setCache(cacheKey, pricePerGB);
-        return pricePerGB;
-      }
-      
-      // Fallback pricing
-      return this.getFallbackEBSPricing(volumeType);
-    } catch (error) {
-      logger.error(`Failed to get EBS pricing for ${volumeType}:`, error);
-      return this.getFallbackEBSPricing(volumeType);
-    }
+        const priceList = await this.fetchPricing(filters);
+        const prices = this.parsePriceFromResponse(priceList);
+        
+        if (prices && prices.length > 0) {
+          logger.info(`EBS pricing fetched: ${volumeType} = $${prices[0].price}/GB-month`);
+          return prices[0].price;
+        }
+        return null;
+      },
+      `ebs-${volumeType}`
+    );
   }
 
   async getEBSIOPSPricing(volumeType, region) {
-    const fallbackPricing = {
+    const pricing = {
       'io1': 0.065,
       'io2': 0.065,
       'gp3': 0.005
     };
-    return fallbackPricing[volumeType] || 0;
-  }
-
-  async getEBSThroughputPricing(region) {
-    return 0.04; // $0.04 per MB/s-month above 125 MB/s for gp3
-  }
-
-  getFallbackInstancePricing(instanceType) {
-    // Fallback pricing for common instance types
-    const fallback = {
-      't2.micro': 0.0116,
-      't2.small': 0.023,
-      't2.medium': 0.0464,
-      't3.micro': 0.0104,
-      't3.small': 0.0208,
-      't3.medium': 0.0416,
-      't3.large': 0.0832,
-      'm5.large': 0.096,
-      'm5.xlarge': 0.192,
-      'c5.large': 0.085,
-      'c5.xlarge': 0.17,
-      'r5.large': 0.126,
-      'r5.xlarge': 0.252
-    };
-    return fallback[instanceType] || 0.0416; // Default to t3.medium
-  }
-
-  getFallbackEBSPricing(volumeType) {
-    const fallback = {
-      'gp2': 0.10,
-      'gp3': 0.08,
-      'io1': 0.125,
-      'io2': 0.125,
-      'st1': 0.045,
-      'sc1': 0.025,
-      'standard': 0.05
-    };
-    return fallback[volumeType] || 0.10;
+    return pricing[volumeType] || 0;
   }
 }

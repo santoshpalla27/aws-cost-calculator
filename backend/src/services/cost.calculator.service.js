@@ -1,10 +1,12 @@
 import { initializePricingServices, pricingRegistry } from './pricing/index.js';
+import { DataMockerService } from './data.mocker.service.js';
 import logger from '../config/logger.config.js';
 
 export class CostCalculatorService {
   constructor(awsClientFactory) {
     this.awsClientFactory = awsClientFactory;
     this.registry = initializePricingServices(awsClientFactory);
+    this.mockerService = new DataMockerService();
     this.launchTemplates = new Map();
   }
 
@@ -17,36 +19,57 @@ export class CostCalculatorService {
       region,
       currency: 'USD',
       timestamp: new Date().toISOString(),
+      mockingReport: null,
       unsupportedResources: [],
       errors: []
     };
 
-    // Pre-process launch templates
+    // Step 1: Pre-process launch templates
     for (const resource of resources) {
       if (resource.type === 'aws_launch_template') {
         this.launchTemplates.set(resource.name, resource.config);
+        logger.info(`Registered launch template: ${resource.name}`);
       }
     }
 
-    // Resolve launch template references for ASGs
+    // Step 2: Resolve launch template references for ASGs
     for (const resource of resources) {
       if (resource.type === 'aws_autoscaling_group') {
         this.resolveASGLaunchTemplate(resource);
       }
     }
 
-    logger.info(`Calculating costs for ${resources.length} resources...`);
-
+    // Step 3: Mock missing required data
+    const processedResources = [];
     for (const resource of resources) {
+      const mockedResult = this.mockerService.mockResourceConfig(resource);
+      processedResources.push({
+        ...resource,
+        config: mockedResult.config,
+        mocked: mockedResult.mocked
+      });
+    }
+
+    // Step 4: Generate mocking report
+    costBreakdown.mockingReport = this.mockerService.generateMockingReport(processedResources);
+
+    logger.info(`Starting cost calculation for ${processedResources.length} resources...`);
+
+    // Step 5: Calculate costs for each resource
+    for (const resource of processedResources) {
       try {
+        // Check if resource type is supported
         if (!this.registry.isSupported(resource.type)) {
           costBreakdown.unsupportedResources.push({
             type: resource.type,
             name: resource.name
           });
+          logger.debug(`Unsupported resource type: ${resource.type}`);
           continue;
         }
 
+        // Calculate cost using the appropriate pricing provider
+        logger.info(`Calculating cost for ${resource.type}.${resource.name}...`);
         const cost = await this.registry.calculateCost(resource, region);
 
         if (cost && cost.hourly > 0) {
@@ -54,7 +77,8 @@ export class CostCalculatorService {
             type: resource.type,
             name: resource.name,
             module: resource.module,
-            ...cost
+            ...cost,
+            mockedAttributes: resource.mocked?.attributes || []
           };
 
           costBreakdown.resources.push(resourceCost);
@@ -76,10 +100,10 @@ export class CostCalculatorService {
           costBreakdown.byCategory[category].hourly += cost.hourly;
           costBreakdown.byCategory[category].resources += 1;
 
-          logger.info(`Cost for ${resource.type}.${resource.name}: $${cost.hourly.toFixed(4)}/hr ($${(cost.hourly * 730).toFixed(2)}/month)`);
+          logger.info(`Cost calculated for ${resource.name}: $${cost.hourly.toFixed(4)}/hour ($${(cost.hourly * 730).toFixed(2)}/month)`);
         }
       } catch (error) {
-        logger.error(`Error calculating cost for ${resource.type}.${resource.name}:`, error);
+        logger.error(`Error calculating cost for ${resource.type}.${resource.name}:`, error.message);
         costBreakdown.errors.push({
           resource: `${resource.type}.${resource.name}`,
           error: error.message
@@ -87,12 +111,12 @@ export class CostCalculatorService {
       }
     }
 
-    // Calculate summary totals
+    // Step 6: Calculate summary totals
     costBreakdown.summary.daily = costBreakdown.summary.hourly * 24;
     costBreakdown.summary.monthly = costBreakdown.summary.hourly * 730;
     costBreakdown.summary.yearly = costBreakdown.summary.hourly * 8760;
 
-    // Convert by-service and by-category hourly to monthly
+    // Convert service/category hourly to monthly
     for (const service of Object.keys(costBreakdown.byService)) {
       costBreakdown.byService[service].monthly = costBreakdown.byService[service].hourly * 730;
     }
@@ -100,8 +124,15 @@ export class CostCalculatorService {
       costBreakdown.byCategory[category].monthly = costBreakdown.byCategory[category].hourly * 730;
     }
 
-    logger.info(`Total cost: $${costBreakdown.summary.hourly.toFixed(4)}/hr ($${costBreakdown.summary.monthly.toFixed(2)}/month)`);
+    logger.info(`========================================`);
+    logger.info(`Total cost calculated: $${costBreakdown.summary.hourly.toFixed(4)}/hr ($${costBreakdown.summary.monthly.toFixed(2)}/month)`);
+    logger.info(`Resources with cost: ${costBreakdown.resources.length}`);
     logger.info(`Unsupported resources: ${costBreakdown.unsupportedResources.length}`);
+    logger.info(`Errors: ${costBreakdown.errors.length}`);
+    if (costBreakdown.mockingReport.mockedResources > 0) {
+      logger.warn(`Mocked resources: ${costBreakdown.mockingReport.mockedResources}`);
+    }
+    logger.info(`========================================`);
 
     return costBreakdown;
   }
@@ -109,7 +140,7 @@ export class CostCalculatorService {
   resolveASGLaunchTemplate(resource) {
     const config = resource.config;
     
-    // Check launch_template
+    // Check regular launch_template
     if (config.launch_template) {
       const ltRef = Array.isArray(config.launch_template) 
         ? config.launch_template[0] 
@@ -119,6 +150,7 @@ export class CostCalculatorService {
         const template = this.launchTemplates.get(ltMatch[1]);
         if (template) {
           config._resolved_launch_template = template;
+          logger.info(`Resolved launch template for ASG ${resource.name}: ${ltMatch[1]}`);
         }
       }
     }
@@ -141,6 +173,7 @@ export class CostCalculatorService {
             const template = this.launchTemplates.get(ltMatch[1]);
             if (template) {
               config._resolved_launch_template = template;
+              logger.info(`Resolved launch template for ASG ${resource.name} (mixed_instances_policy): ${ltMatch[1]}`);
             }
           }
         }
@@ -153,8 +186,10 @@ export class CostCalculatorService {
       'aws_instance': 'EC2',
       'aws_autoscaling_group': 'EC2',
       'aws_launch_template': 'EC2',
-      'aws_ebs_volume': 'EC2',
+      'aws_spot_instance_request': 'EC2',
+      'aws_ebs_volume': 'EBS',
       'aws_lambda_function': 'Lambda',
+      'aws_lambda_': 'Lambda',
       'aws_ecs_': 'ECS',
       'aws_eks_': 'EKS',
       'aws_rds_': 'RDS',
@@ -173,10 +208,14 @@ export class CostCalculatorService {
       'aws_apigateway': 'APIGateway',
       'aws_sqs_': 'SQS',
       'aws_sns_': 'SNS',
+      'aws_msk_': 'MSK',
       'aws_cloudwatch_': 'CloudWatch',
+      'aws_cloudtrail': 'CloudTrail',
       'aws_kms_': 'KMS',
       'aws_secretsmanager_': 'SecretsManager',
+      'aws_ssm_': 'SSM',
       'aws_waf': 'WAF',
+      'aws_shield_': 'Shield',
       'aws_codebuild_': 'CodeBuild',
       'aws_codepipeline': 'CodePipeline',
       'aws_sfn_': 'StepFunctions'
@@ -192,12 +231,12 @@ export class CostCalculatorService {
 
   getCategoryFromResourceType(resourceType) {
     const categoryMap = {
-      'Compute': ['aws_instance', 'aws_autoscaling_', 'aws_launch_', 'aws_lambda_', 'aws_ecs_', 'aws_eks_'],
+      'Compute': ['aws_instance', 'aws_autoscaling_', 'aws_launch_', 'aws_lambda_', 'aws_ecs_', 'aws_eks_', 'aws_spot_'],
       'Storage': ['aws_s3_', 'aws_ebs_', 'aws_efs_'],
       'Database': ['aws_db_', 'aws_rds_', 'aws_dynamodb_', 'aws_elasticache_'],
-      'Networking': ['aws_vpc', 'aws_subnet', 'aws_nat_', 'aws_lb', 'aws_alb', 'aws_nlb', 'aws_cloudfront_', 'aws_route53_', 'aws_api_gateway'],
-      'Security': ['aws_waf', 'aws_shield_', 'aws_kms_', 'aws_secretsmanager_', 'aws_ssm_'],
-      'Messaging': ['aws_sqs_', 'aws_sns_', 'aws_msk_', 'aws_cloudwatch_event'],
+      'Networking': ['aws_vpc', 'aws_subnet', 'aws_nat_', 'aws_lb', 'aws_alb', 'aws_nlb', 'aws_cloudfront_', 'aws_route53_', 'aws_api_gateway', 'aws_eip'],
+      'Security': ['aws_waf', 'aws_shield_', 'aws_kms_', 'aws_secretsmanager_', 'aws_ssm_', 'aws_acm_'],
+      'Messaging': ['aws_sqs_', 'aws_sns_', 'aws_msk_', 'aws_cloudwatch_event', 'aws_mq_'],
       'Monitoring': ['aws_cloudwatch_', 'aws_cloudtrail', 'aws_xray_'],
       'DevOps': ['aws_codepipeline', 'aws_codebuild_', 'aws_codedeploy_', 'aws_sfn_']
     };
@@ -221,16 +260,18 @@ export class CostCalculatorService {
         yearly: `$${costBreakdown.summary.yearly.toFixed(2)}`
       },
       byService: Object.fromEntries(
-        Object.entries(costBreakdown.byService).map(([k, v]) => [k, `$${v.monthly.toFixed(2)}/month`])
+        Object.entries(costBreakdown.byService).map(([k, v]) => [k, `$${v.monthly.toFixed(2)}/month (${v.resources} resources)`])
       ),
       byCategory: Object.fromEntries(
-        Object.entries(costBreakdown.byCategory).map(([k, v]) => [k, `$${v.monthly.toFixed(2)}/month`])
+        Object.entries(costBreakdown.byCategory).map(([k, v]) => [k, `$${v.monthly.toFixed(2)}/month (${v.resources} resources)`])
       ),
       resourceCount: costBreakdown.resources.length,
       unsupportedCount: costBreakdown.unsupportedResources.length,
+      mockingReport: costBreakdown.mockingReport,
       region: costBreakdown.region,
       currency: costBreakdown.currency,
-      timestamp: costBreakdown.timestamp
+      timestamp: costBreakdown.timestamp,
+      errors: costBreakdown.errors
     };
   }
 }

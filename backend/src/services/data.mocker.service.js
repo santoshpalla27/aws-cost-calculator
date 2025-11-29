@@ -1,118 +1,122 @@
 import logger from '../config/logger.config.js';
 
+/**
+ * Service for mocking missing required data in Terraform configurations
+ * Used when variable resolution fails or required attributes are missing
+ */
 export class DataMockerService {
+  constructor() {
+    // Define required attributes for cost calculation per resource type
+    this.requiredAttributes = {
+      'aws_instance': ['instance_type'],
+      'aws_db_instance': ['instance_class', 'engine'],
+      'aws_rds_cluster': ['engine'],
+      'aws_rds_cluster_instance': ['instance_class'],
+      'aws_ebs_volume': ['size', 'type'],
+      'aws_elasticache_cluster': ['node_type'],
+      'aws_elasticache_replication_group': ['node_type'],
+      'aws_launch_template': ['instance_type'],
+      'aws_lambda_function': ['memory_size'],
+      'aws_ecs_service': ['desired_count'],
+      'aws_eks_node_group': ['instance_types'],
+      'aws_dynamodb_table': ['billing_mode'],
+      'aws_msk_cluster': ['broker_node_group_info']
+    };
+
+    // Default values for mocking
+    this.defaults = {
+      'instance_type': 't3.small',
+      'instance_class': 'db.t3.micro',
+      'engine': 'mysql',
+      'size': 20,
+      'type': 'gp3',
+      'node_type': 'cache.t3.micro',
+      'memory_size': 128,
+      'desired_count': 1,
+      'instance_types': ['t3.medium'],
+      'billing_mode': 'PAY_PER_REQUEST'
+    };
+  }
+
+  /**
+   * Check if a value needs to be mocked
+   */
   shouldMockValue(resourceType, attributeName, currentValue) {
-    // Don't mock if we have a real, resolved value
+    // Don't mock if we have a valid value
     if (currentValue !== undefined && 
         currentValue !== null && 
         currentValue !== '') {
       
-      // Check if it's still an unresolved variable reference
-      if (typeof currentValue === 'string') {
-        // If it still contains ${var. or ${local. etc., it needs mocking
-        if (currentValue.includes('${var.') || 
-            currentValue.includes('${local.') ||
-            currentValue.includes('${data.')) {
-          logger.warn(`Unresolved reference in ${resourceType}.${attributeName}: ${currentValue}`);
-          return this.isRequiredForCosting(resourceType, attributeName);
-        }
-        // Real value, don't mock
-        return false;
+      // Check if it's an unresolved Terraform reference
+      if (typeof currentValue === 'string' && this.isUnresolvedReference(currentValue)) {
+        logger.warn(`Unresolved reference found: ${attributeName} = ${currentValue}`);
+        return this.isRequiredForCosting(resourceType, attributeName);
       }
-      // Non-string value, don't mock
+      
       return false;
     }
 
     return this.isRequiredForCosting(resourceType, attributeName);
   }
 
+  /**
+   * Check if value is an unresolved Terraform reference
+   */
   isUnresolvedReference(value) {
     if (typeof value !== 'string') return false;
-    if (value === '') return true;
     
-    // Check for unresolved Terraform references
     const patterns = [
       /^\$\{var\./,
       /^\$\{data\./,
       /^\$\{local\./,
       /^\$\{module\./,
-      /^\$\{aws_/
+      /^\$\{aws_/,
+      /^var\./,
+      /^data\./,
+      /^local\./,
+      /^module\./
     ];
 
     return patterns.some(pattern => pattern.test(value));
   }
 
+  /**
+   * Check if attribute is required for cost calculation
+   */
   isRequiredForCosting(resourceType, attributeName) {
-    const costingAttributes = {
-      'aws_instance': ['instance_type'],
-      'aws_db_instance': ['instance_class', 'engine'],
-      'aws_ebs_volume': ['size', 'type'],
-      'aws_elasticache_cluster': ['node_type'],
-      'aws_elasticache_replication_group': ['node_type'],
-      'aws_launch_template': ['instance_type']
-    };
-
-    const required = costingAttributes[resourceType] || [];
+    const required = this.requiredAttributes[resourceType] || [];
     return required.includes(attributeName);
   }
 
+  /**
+   * Mock resource configuration - returns mocked config and report
+   */
   mockResourceConfig(resource) {
     const mocked = { ...resource.config };
-    const hasMocked = { attributes: [] };
+    const mockedAttributes = [];
 
-    // Only mock cost-critical attributes
-    switch (resource.type) {
-      case 'aws_instance':
-        if (this.shouldMockValue('aws_instance', 'instance_type', mocked.instance_type)) {
-          mocked.instance_type = 't3.small';
-          hasMocked.attributes.push('instance_type');
-          logger.warn(`Mocked instance_type for ${resource.name}: t3.small`);
-        }
-        break;
+    const requiredAttrs = this.requiredAttributes[resource.type] || [];
 
-      case 'aws_db_instance':
-        if (this.shouldMockValue('aws_db_instance', 'instance_class', mocked.instance_class)) {
-          mocked.instance_class = 'db.t3.micro';
-          hasMocked.attributes.push('instance_class');
-          logger.warn(`Mocked instance_class for ${resource.name}: db.t3.micro`);
+    for (const attr of requiredAttrs) {
+      if (this.shouldMockValue(resource.type, attr, mocked[attr])) {
+        const defaultValue = this.defaults[attr];
+        if (defaultValue !== undefined) {
+          mocked[attr] = defaultValue;
+          mockedAttributes.push(attr);
+          logger.warn(`Mocked ${attr} for ${resource.type}.${resource.name}: ${defaultValue}`);
         }
-        if (this.shouldMockValue('aws_db_instance', 'engine', mocked.engine)) {
-          mocked.engine = 'mysql';
-          hasMocked.attributes.push('engine');
-          logger.warn(`Mocked engine for ${resource.name}: mysql`);
-        }
-        break;
-
-      case 'aws_ebs_volume':
-        if (this.shouldMockValue('aws_ebs_volume', 'size', mocked.size)) {
-          mocked.size = 10;
-          hasMocked.attributes.push('size');
-        }
-        if (this.shouldMockValue('aws_ebs_volume', 'type', mocked.type)) {
-          mocked.type = 'gp3';
-          hasMocked.attributes.push('type');
-        }
-        break;
-
-      case 'aws_elasticache_cluster':
-      case 'aws_elasticache_replication_group':
-        if (this.shouldMockValue(resource.type, 'node_type', mocked.node_type)) {
-          mocked.node_type = 'cache.t3.micro';
-          hasMocked.attributes.push('node_type');
-        }
-        break;
-
-      case 'aws_launch_template':
-        if (this.shouldMockValue('aws_launch_template', 'instance_type', mocked.instance_type)) {
-          mocked.instance_type = 't3.small';
-          hasMocked.attributes.push('instance_type');
-        }
-        break;
+      }
     }
 
-    return { config: mocked, mocked: hasMocked };
+    return {
+      config: mocked,
+      mocked: { attributes: mockedAttributes }
+    };
   }
 
+  /**
+   * Generate mocking report for all resources
+   */
   generateMockingReport(resources) {
     const report = {
       totalResources: resources.length,
@@ -124,15 +128,14 @@ export class DataMockerService {
     for (const resource of resources) {
       if (resource.mocked && resource.mocked.attributes.length > 0) {
         report.mockedResources++;
-        report.mockedAttributes[`${resource.type}.${resource.name}`] = 
-          resource.mocked.attributes;
+        report.mockedAttributes[`${resource.type}.${resource.name}`] = resource.mocked.attributes;
       }
     }
 
     if (report.mockedResources > 0) {
       report.warnings.push(
-        `${report.mockedResources} resources had minimal attributes mocked (${Object.keys(report.mockedAttributes).length} total). ` +
-        `Provide complete Terraform configuration for 100% accuracy.`
+        `${report.mockedResources} resources had attributes mocked due to missing values. ` +
+        `Provide complete Terraform configuration or variable defaults for accurate pricing.`
       );
     }
 
